@@ -1,0 +1,209 @@
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum DeploymentStatus {
+  QUEUED
+  CLONING
+  BUILDING
+  DEPLOYING
+  HEALTH_CHECK
+  READY
+  FAILED
+  CANCELLED
+  SUPERSEDED
+}
+
+model User {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  name         String?
+  email        String   @unique
+  passwordHash String
+
+  refreshSessions RefreshSession[]
+
+  githubConnection GitHubConnection?
+  githubOAuthStates GitHubOAuthState[]
+
+  projects     Project[]
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Project {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  name         String
+  repository   String
+  repositoryId String?
+  branch       String   @default("main")
+
+  framework    String?
+  buildCommand String?
+  startCommand String?
+  outputDir    String?
+  rootDir      String   @default(".")
+
+  userId       String   @db.ObjectId
+  user         User     @relation(fields: [userId], references: [id])
+
+  deployments  Deployment[]
+  environmentVariables EnvironmentVariable[]
+
+  githubWebhook GitHubWebhook?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Deployment {
+  id            String           @id @default(auto()) @map("_id") @db.ObjectId
+
+  status        DeploymentStatus @default(QUEUED)
+
+  commitSha     String?
+  commitMessage String?
+  deploymentUrl String?
+
+  projectId     String           @db.ObjectId
+  project       Project          @relation(fields: [projectId], references: [id])
+
+  workerId       String?
+  claimedAt      DateTime?
+  leaseExpiresAt DateTime?
+  attempts       Int      @default(0)
+
+  framework       String?
+  buildCommand    String?
+  packageManager  String?
+  outputDir       String?
+  buildDurationMs Int?
+  errorMessage    String?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+
+  deploymentLogs  DeploymentLog[]
+
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([projectId, createdAt])
+  @@index([status])
+}
+
+
+model RefreshSession {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  tokenHash String   @unique
+
+  userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id])
+
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model EnvironmentVariable {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  key            String
+  encryptedValue String
+
+  projectId      String   @db.ObjectId
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([projectId, key])
+  @@index([projectId])
+}
+
+model GitHubConnection {
+  id                  String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  githubUserId        String   @unique
+  githubUsername      String
+  avatarUrl           String?
+  encryptedAccessToken String
+  scopes              String[]
+
+  userId              String   @unique @db.ObjectId
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model GitHubOAuthState {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  stateHash String   @unique
+
+  userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+
+model GitHubWebhook {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  webhookId      Int
+  encryptedSecret String
+  active         Boolean  @default(true)
+
+  projectId      String   @unique @db.ObjectId
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model GitHubWebhookDelivery {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  deliveryId  String   @unique
+  event       String
+  projectId   String   @db.ObjectId
+  processedAt DateTime @default(now())
+
+  createdAt   DateTime @default(now())
+
+  @@index([projectId, createdAt])
+}
+
+model DeploymentLog {
+  id           String     @id @default(auto()) @map("_id") @db.ObjectId
+
+  deploymentId String     @db.ObjectId
+  deployment   Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+
+  stage        String
+  level        String     @default("INFO")
+  message      String
+
+  createdAt    DateTime   @default(now())
+
+  @@index([deploymentId, createdAt])
+}
