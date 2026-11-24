@@ -5,6 +5,7 @@ import {
   cancelDeployment,
   createDeployment,
   getDeploymentForUser,
+  getDeploymentLogs,
   listDeploymentsForProject,
 } from "./deployments.service.js";
 
@@ -13,6 +14,9 @@ import {
   createDeploymentBodyJsonSchema,
   createDeploymentResponseSchema,
   deploymentIdParamsSchema,
+  deploymentLogsQueryJsonSchema,
+  deploymentLogsQuerySchema,
+  deploymentLogsResponseSchema,
   deploymentResponseSchema,
   listDeploymentsResponseSchema,
   projectIdParamsSchema,
@@ -171,6 +175,38 @@ export async function deploymentsRoutes(app: FastifyInstance) {
   );
 
   // ============================================
+  // DEPLOYMENT LOGS
+  // GET /api/deployments/:id/logs?after=<cursor>&limit=200
+  // ============================================
+
+  app.get(
+    "/deployments/:id/logs",
+    {
+      schema: {
+        tags: ["Deployments"],
+        summary: "Get deployment logs",
+        description:
+          "Returns build/deploy logs in order. Poll with ?after=<nextCursor> until finished is true.",
+        security: deploymentSecurity,
+        params: deploymentIdParamsJsonSchema,
+        querystring: deploymentLogsQueryJsonSchema,
+        response: deploymentLogsResponseSchema,
+      },
+    },
+    async (request, reply) => {
+      const { id } = deploymentIdParamsSchema.parse(request.params);
+      const query = deploymentLogsQuerySchema.parse(request.query);
+
+      const result = await getDeploymentLogs(request.user.sub, id, query);
+
+      return reply.send({
+        success: true,
+        data: result,
+      });
+    }
+  );
+
+  // ============================================
   // CANCEL DEPLOYMENT
   // POST /api/deployments/:id/cancel
   // ============================================
@@ -182,7 +218,7 @@ export async function deploymentsRoutes(app: FastifyInstance) {
         tags: ["Deployments"],
         summary: "Cancel deployment",
         description:
-          "Cancels a deployment that is still waiting in the queue.",
+          "Cancels a queued or running deployment. A running build is stopped within a few seconds.",
         security: deploymentSecurity,
         params: deploymentIdParamsJsonSchema,
         response: deploymentResponseSchema,

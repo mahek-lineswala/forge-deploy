@@ -1,6 +1,8 @@
 
 import { UnrecoverableError, Worker, type Job } from "bullmq";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 import { redis } from "./lib/redis.js";
 import { env } from "./config/env.js";
@@ -21,6 +23,9 @@ import { isNonRetryableError } from "./utils/errors.js";
 export const DEPLOYMENT_QUEUE_NAME = "deployments";
 
 const LEASE_RENEWAL_INTERVAL_MS = 30_000;
+
+// How quickly a user cancel stops a running clone/build.
+const CANCEL_POLL_INTERVAL_MS = 5_000;
 
 const TERMINAL_STATUSES = new Set([
   "READY",
@@ -69,6 +74,24 @@ export const deploymentWorker = new Worker<DeploymentJobData>(
     let leaseLost = false;
     let renewalInProgress = false;
 
+    // Aborting kills the running git/docker process (docker rm -f removes the container).
+    const abortController = new AbortController();
+
+    const cancelTimer = setInterval(async () => {
+      if (abortController.signal.aborted) return;
+
+      try {
+        if ((await getDeploymentStatus(deploymentId)) === "CANCELLED") {
+          console.log(`[Worker] Deployment ${deploymentId} was cancelled. Stopping.`);
+          abortController.abort();
+        }
+      } catch {
+        // Status check failures are handled by lease renewal.
+      }
+    }, CANCEL_POLL_INTERVAL_MS);
+
+    cancelTimer.unref();
+
     const leaseTimer = setInterval(async () => {
       if (renewalInProgress || leaseLost) {
         return;
@@ -84,6 +107,7 @@ export const deploymentWorker = new Worker<DeploymentJobData>(
 
         if (!renewed) {
           leaseLost = true;
+          abortController.abort();
 
           console.error(
             `[Worker] Lease lost for deployment ${deploymentId}.`,
@@ -92,6 +116,7 @@ export const deploymentWorker = new Worker<DeploymentJobData>(
       } catch (error) {
         // A failed renewal means ownership can no longer be trusted.
         leaseLost = true;
+        abortController.abort();
 
         console.error(
           `[Worker] Lease renewal failed for ${deploymentId}:`,
@@ -109,6 +134,7 @@ export const deploymentWorker = new Worker<DeploymentJobData>(
         deploymentId,
         workerId,
         () => leaseLost,
+        abortController.signal,
       );
 
       if (leaseLost) {
@@ -121,6 +147,21 @@ export const deploymentWorker = new Worker<DeploymentJobData>(
         `[Worker] Finished job ${job.id} for deployment ${deploymentId}`,
       );
     } catch (error) {
+      const status = await getDeploymentStatus(deploymentId).catch(() => null);
+
+      if (status === "CANCELLED" && /^[a-f0-9]{24}$/.test(deploymentId)) {
+        // Cancelled is terminal: nobody will publish this deployment again,
+        // so remove anything it already published and stop retrying.
+        await fs
+          .rm(path.resolve(env.DEPLOYMENTS_DIR, deploymentId), {
+            recursive: true,
+            force: true,
+          })
+          .catch(() => undefined);
+
+        throw new UnrecoverableError(`Deployment ${deploymentId} was cancelled.`);
+      }
+
       const attempts = job.opts.attempts ?? 1;
       const nonRetryable = isNonRetryableError(error);
       const finalAttempt =
@@ -151,6 +192,7 @@ export const deploymentWorker = new Worker<DeploymentJobData>(
       throw error;
     } finally {
       clearInterval(leaseTimer);
+      clearInterval(cancelTimer);
 
       try {
         await releaseDeploymentLease(deploymentId, workerId);

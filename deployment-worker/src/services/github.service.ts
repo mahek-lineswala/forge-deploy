@@ -1,10 +1,8 @@
 
-import { createDecipheriv } from "node:crypto";
-
 import { ObjectId } from "mongodb";
 
-import { env } from "../config/env.js";
 import { getDatabase } from "../lib/mongodb.js";
+import { decryptSecret } from "../lib/encryption.js";
 import { NonRetryableError } from "../utils/errors.js";
 
 import type {
@@ -19,34 +17,7 @@ export interface GitHubRepositoryAccess {
 }
 
 function decryptAccessToken(encryptedValue: string): string {
-  const parts = encryptedValue.split(":");
-
-  if (parts.length !== 4 || parts[0] !== "v1") {
-    throw new NonRetryableError("Invalid encrypted GitHub access token format.");
-  }
-
-  const [, ivHex, authTagHex, ciphertextHex] = parts;
-
-  const key = Buffer.from(env.ENCRYPTION_KEY, "hex");
-  const iv = Buffer.from(ivHex!, "hex");
-  const authTag = Buffer.from(authTagHex!, "hex");
-  const ciphertext = Buffer.from(ciphertextHex!, "hex");
-
-  try {
-    const decipher = createDecipheriv("aes-256-gcm", key, iv);
-
-    decipher.setAuthTag(authTag);
-
-    return Buffer.concat([
-      decipher.update(ciphertext),
-      decipher.final(),
-    ]).toString("utf8");
-  } catch {
-    // Wrong ENCRYPTION_KEY or corrupted value: retrying cannot help.
-    throw new NonRetryableError(
-      "Could not decrypt the GitHub access token. Check that backend and worker use the same ENCRYPTION_KEY.",
-    );
-  }
+  return decryptSecret(encryptedValue, "GitHub access token");
 }
 
 function normalizeRepositoryUrl(repository: string): string {

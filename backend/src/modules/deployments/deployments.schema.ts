@@ -26,6 +26,17 @@ export const projectIdParamsSchema = z.object({
   projectId: objectId,
 });
 
+// Deployment logs query: cursor = id of the last log the client already has.
+export const deploymentLogsQuerySchema = z.object({
+  after: z
+    .string()
+    .regex(/^[a-f0-9]{24}$/i, "Invalid log cursor")
+    .optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(200),
+});
+
+export type DeploymentLogsQuery = z.infer<typeof deploymentLogsQuerySchema>;
+
 export type CreateDeploymentBody = z.infer<
   typeof createDeploymentBodySchema
 >;
@@ -79,6 +90,15 @@ const deploymentJsonSchema = {
     commitMessage: { type: ["string", "null"] },
     deploymentUrl: { type: ["string", "null"] },
     projectId: { type: "string" },
+    framework: { type: ["string", "null"] },
+    packageManager: { type: ["string", "null"] },
+    buildCommand: { type: ["string", "null"] },
+    outputDir: { type: ["string", "null"] },
+    buildDurationMs: { type: ["integer", "null"] },
+    errorMessage: { type: ["string", "null"] },
+    attempts: { type: "integer" },
+    startedAt: { type: ["string", "null"], format: "date-time" },
+    finishedAt: { type: ["string", "null"], format: "date-time" },
     createdAt: { type: "string", format: "date-time" },
     updatedAt: { type: "string", format: "date-time" },
   },
@@ -123,6 +143,43 @@ export const deploymentResponseSchema = envelope(200, {
     deployment: deploymentJsonSchema,
   },
   required: ["deployment"],
+});
+
+export const deploymentLogsQueryJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    after: {
+      type: "string",
+      pattern: "^[a-fA-F0-9]{24}$",
+      description: "Return logs after this log id (use nextCursor from the previous response)",
+    },
+    limit: { type: "integer", minimum: 1, maximum: 500, default: 200 },
+  },
+} as const;
+
+export const deploymentLogsResponseSchema = envelope(200, {
+  type: "object",
+  properties: {
+    logs: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          stage: { type: "string" },
+          level: { type: "string" },
+          message: { type: "string" },
+          createdAt: { type: "string", format: "date-time" },
+        },
+        required: ["id", "stage", "level", "message", "createdAt"],
+      },
+    },
+    nextCursor: { type: ["string", "null"] },
+    status: { type: "string" },
+    finished: { type: "boolean" },
+  },
+  required: ["logs", "nextCursor", "status", "finished"],
 });
 
 export const listDeploymentsResponseSchema = envelope(200, {

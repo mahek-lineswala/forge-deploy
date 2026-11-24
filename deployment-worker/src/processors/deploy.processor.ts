@@ -14,6 +14,7 @@ import {
 import { generateDeploymentUrl } from "../services/domain.service.js";
 import { checkDeploymentHealth } from "../services/health.service.js";
 import { NonRetryableError } from "../utils/errors.js";
+import { publishDirectoryAtomically } from "../services/publish.service.js";
 import { writeDeploymentLog } from "../services/deployment-log.service.js";
 import {
   completeDeploymentMetadata,
@@ -124,21 +125,12 @@ const claimed = await updateDeploymentStatus(
 
   try {
     await assertLease();
-    await fs.mkdir(path.dirname(destination), {
-      recursive: true,
-    });
-
-    await fs.rm(destination, {
-      recursive: true,
-      force: true,
-    });
-
-    await fs.cp(source, destination, {
-      recursive: true,
-      errorOnExist: true,
-      force: false,
-      dereference: false,
-    });
+    await publishDirectoryAtomically(
+      source,
+      destination,
+      workerId,
+      assertLease,
+    );
 
     await logSafely(
       build.deploymentId,
@@ -243,10 +235,19 @@ const claimed = await updateDeploymentStatus(
       error instanceof Error ? error.message : "Unknown deployment error";
 
     if (!published) {
-      await fs.rm(destination, {
-        recursive: true,
-        force: true,
-      }).catch(() => undefined);
+      // Only the current lease owner may remove the published files;
+      // a stale attempt must not delete a newer attempt's output.
+      const stillOwner = await assertLease().then(
+        () => true,
+        () => false,
+      );
+
+      if (stillOwner) {
+        await fs.rm(destination, {
+          recursive: true,
+          force: true,
+        }).catch(() => undefined);
+      }
 
      try {
   await assertLease();

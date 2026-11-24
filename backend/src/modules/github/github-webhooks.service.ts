@@ -328,103 +328,95 @@ export async function processGitHubWebhook(
   }
 
   // ==========================================
-  // DUPLICATE DELIVERY PROTECTION
+  // EVENT FILTERING (before anything is written)
   // ==========================================
 
+  const project = webhook.project;
+  let ignoreReason: string | null = null;
+
+  if (event !== "push") {
+    ignoreReason = "Event ignored";
+  } else {
+    const expectedRepository = parseGitHubRepository(project.repository);
+
+    if (
+      payload.repository?.full_name?.toLowerCase() !==
+      expectedRepository.fullName.toLowerCase()
+    ) {
+      ignoreReason = "Repository mismatch";
+    } else if (
+      payload.ref !== `refs/heads/${project.branch}` ||
+      payload.deleted === true
+    ) {
+      ignoreReason = "Branch does not match project configuration";
+    }
+  }
+
+  if (ignoreReason) {
+    // Record the delivery for auditing; duplicates are harmless here.
+    try {
+      await prisma.gitHubWebhookDelivery.create({
+        data: { deliveryId, event, projectId },
+      });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, deploymentCreated: false };
+      }
+
+      throw error;
+    }
+
+    return {
+      received: true,
+      duplicate: false,
+      deploymentCreated: false,
+      reason: ignoreReason,
+    };
+  }
+
+  // ==========================================
+  // DELIVERY + DEPLOYMENT IN ONE TRANSACTION
+  // Either both exist or neither does, so a crash can no longer
+  // record a delivery without its deployment. (Atlas = replica set.)
+  // ==========================================
+
+  let deployment;
+
   try {
-    await prisma.gitHubWebhookDelivery.create({
-      data: {
-        deliveryId,
-        event,
-        projectId,
-      },
+    deployment = await prisma.$transaction(async (tx) => {
+      await tx.gitHubWebhookDelivery.create({
+        data: { deliveryId, event, projectId },
+      });
+
+      return tx.deployment.create({
+        data: {
+          status: "QUEUED",
+          commitSha: payload.head_commit?.id ?? null,
+          commitMessage: payload.head_commit?.message ?? null,
+          projectId: project.id,
+        },
+      });
     });
   } catch (error) {
     if (isUniqueConstraintError(error)) {
-      return {
-        received: true,
-        duplicate: true,
-        deploymentCreated: false,
-      };
+      return { received: true, duplicate: true, deploymentCreated: false };
     }
 
     throw error;
   }
 
   // ==========================================
-  // EVENT FILTERING
-  // ==========================================
-
-  if (event !== "push") {
-    return {
-      received: true,
-      duplicate: false,
-      deploymentCreated: false,
-      reason: "Event ignored",
-    };
-  }
-
-  const project = webhook.project;
-  const expectedRepository = parseGitHubRepository(project.repository);
-
-  if (
-    payload.repository?.full_name?.toLowerCase() !==
-    expectedRepository.fullName.toLowerCase()
-  ) {
-    return {
-      received: true,
-      duplicate: false,
-      deploymentCreated: false,
-      reason: "Repository mismatch",
-    };
-  }
-
-  const expectedRef = `refs/heads/${project.branch}`;
-
-  if (
-    payload.ref !== expectedRef ||
-    payload.deleted === true
-  ) {
-    return {
-      received: true,
-      duplicate: false,
-      deploymentCreated: false,
-      reason: "Branch does not match project configuration",
-    };
-  }
-
-  // ==========================================
-  // CREATE DEPLOYMENT IN MONGODB
-  // ==========================================
-
-  const deployment = await prisma.deployment.create({
-    data: {
-      status: "QUEUED",
-      commitSha: payload.head_commit?.id ?? null,
-      commitMessage: payload.head_commit?.message ?? null,
-      projectId: project.id,
-    },
-  });
-
-  // ==========================================
   // ADD DEPLOYMENT TO BULLMQ
+  // If this fails (or the process dies here) the deployment stays QUEUED
+  // and the reconciler enqueues it within ~2 minutes.
   // ==========================================
 
   try {
     await enqueueDeployment(deployment.id);
-  } catch {
-    await prisma.deployment.update({
-      where: {
-        id: deployment.id,
-      },
-      data: {
-        status: "FAILED",
-      },
-    });
-
-    throw new AppError(
-      503,
-      "GitHub deployment could not be added to the queue",
+  } catch (error) {
+    console.error(
+      `Webhook deployment ${deployment.id} not enqueued yet; reconciler will retry:`,
+      error,
     );
   }
 

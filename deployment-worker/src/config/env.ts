@@ -22,6 +22,16 @@ const envSchema = z.object({
 
   DEPLOYMENT_BASE_URL: z.string().url().default("http://localhost:8080"),
 
+  // Builds run as this uid:gid (the "node" user in node:22-alpine). Use "root" only if
+  // your Docker setup cannot write to the bind-mounted workspace as a normal user.
+  BUILD_USER: z.string().regex(/^(root|\d+:\d+)$/).default("1000:1000"),
+
+  // true: dependencies install with network, the build step runs with --network none.
+  BUILD_NETWORK_ISOLATION: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+
   HEALTH_CHECK_ENABLED: z
     .enum(["true", "false"])
     .default("true")

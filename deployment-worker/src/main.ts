@@ -6,8 +6,12 @@ import {
 
 import { redis } from "./lib/redis.js";
 import { deploymentWorker } from "./worker.js";
+import { runJanitor } from "./services/janitor.service.js";
+
+const JANITOR_INTERVAL_MS = 15 * 60 * 1000;
 
 let shuttingDown = false;
+let janitorTimer: NodeJS.Timeout | null = null;
 let mongoConnected = false;
 
 async function start(): Promise<void> {
@@ -33,6 +37,11 @@ async function start(): Promise<void> {
     });
 
     console.log("[Worker] ForgeDeploy worker is ready.");
+
+    // Remove leftovers from crashed attempts now, then periodically.
+    void runJanitor();
+    janitorTimer = setInterval(() => void runJanitor(), JANITOR_INTERVAL_MS);
+    janitorTimer.unref();
   } catch (error) {
     console.error("[Worker] Startup failed:", error);
 
@@ -49,6 +58,10 @@ async function shutdown(
   if (shuttingDown) return;
 
   shuttingDown = true;
+
+  if (janitorTimer) {
+    clearInterval(janitorTimer);
+  }
 
   console.log(`[Worker] Received ${signal}. Shutting down...`);
 

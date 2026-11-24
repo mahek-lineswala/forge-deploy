@@ -4,6 +4,7 @@ import { env } from "./config/env.js";
 import { prisma } from "./lib/prisma.js";
 import { redis } from "./lib/redis.js";
 import { deploymentQueue } from "./modules/deployments/deployments.queue.js";
+import { startDeploymentReconciler } from "./modules/deployments/deployments.reconciler.js";
 
 async function start() {
   const app = await buildApp();
@@ -46,6 +47,8 @@ async function start() {
 
     app.log.info(`ForgeDeploy running on port ${env.PORT}`);
 
+    const stopReconciler = startDeploymentReconciler(app.log);
+
     // ============================================
     // GRACEFUL SHUTDOWN
     // ============================================
@@ -54,6 +57,8 @@ async function start() {
       if (shuttingDown) return;
 
       shuttingDown = true;
+
+      stopReconciler();
 
       app.log.info(`Received ${signal}. Shutting down ForgeDeploy...`);
 

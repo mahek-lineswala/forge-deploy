@@ -1,6 +1,17 @@
-# Static deployment server for local development.
-#   docker compose -f infra/docker-compose.yml up -d
+# Local infrastructure: Redis (queue) + Nginx (static deployments).
+#   docker compose -f infra/docker-compose.yml up -d     start
+#   docker compose -f infra/docker-compose.yml stop      stop
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: forgedeploy-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]   # queue survives restarts
+    ports:
+      - "127.0.0.1:6379:6379"   # local machine only
+    volumes:
+      - redis-data:/data
+
   nginx:
     image: nginx:1.27-alpine
     container_name: forgedeploy-nginx
@@ -10,3 +21,6 @@ services:
     volumes:
       - ../deployment-worker/deployments:/srv/deployments:ro
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+volumes:
+  redis-data:

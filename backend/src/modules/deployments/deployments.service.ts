@@ -3,7 +3,24 @@ import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/app-error.js";
 import { redis } from "../../lib/redis.js";
 import { enqueueDeployment, removeQueuedDeployment } from "./deployments.queue.js";
-import type { CreateDeploymentBody } from "./deployments.schema.js";
+import type {
+  CreateDeploymentBody,
+  DeploymentLogsQuery,
+} from "./deployments.schema.js";
+
+const ACTIVE_STATUSES = [
+  "CLONING",
+  "BUILDING",
+  "DEPLOYING",
+  "HEALTH_CHECK",
+] as const;
+
+const TERMINAL_STATUSES = new Set([
+  "READY",
+  "FAILED",
+  "CANCELLED",
+  "SUPERSEDED",
+]);
 
 // ============================================
 // PROJECT OWNERSHIP
@@ -155,7 +172,50 @@ export async function getDeploymentForUser(
 }
 
 // ============================================
+// DEPLOYMENT LOGS (cursor pagination)
+// Poll with ?after=<nextCursor> until finished is true.
+// ============================================
+
+export async function getDeploymentLogs(
+  userId: string,
+  deploymentId: string,
+  query: DeploymentLogsQuery
+) {
+  const deployment = await getDeploymentForUser(userId, deploymentId);
+
+  const logs = await prisma.deploymentLog.findMany({
+    where: {
+      deploymentId,
+      ...(query.after ? { id: { gt: query.after } } : {}),
+    },
+    orderBy: { id: "asc" },
+    take: query.limit,
+    select: {
+      id: true,
+      stage: true,
+      level: true,
+      message: true,
+      createdAt: true,
+    },
+  });
+
+  const nextCursor = logs.at(-1)?.id ?? query.after ?? null;
+
+  return {
+    logs,
+    nextCursor,
+    status: deployment.status,
+    // Finished only when the deployment is terminal AND this page was not full.
+    finished:
+      TERMINAL_STATUSES.has(deployment.status) && logs.length < query.limit,
+  };
+}
+
+// ============================================
 // CANCEL DEPLOYMENT
+// QUEUED  -> removed from BullMQ and marked CANCELLED.
+// Running -> marked CANCELLED; the worker notices within ~5 s,
+//            kills the git/docker process and removes the container.
 // ============================================
 
 export async function cancelDeployment(
@@ -167,10 +227,35 @@ export async function cancelDeployment(
     deploymentId
   );
 
+  if ((ACTIVE_STATUSES as readonly string[]).includes(deployment.status)) {
+    const result = await prisma.deployment.updateMany({
+      where: {
+        id: deploymentId,
+        status: { in: [...ACTIVE_STATUSES] },
+      },
+      data: {
+        status: "CANCELLED",
+        errorMessage: "Cancelled by user",
+        finishedAt: new Date(),
+      },
+    });
+
+    if (result.count === 0) {
+      throw new AppError(
+        409,
+        "Deployment status changed and it could not be cancelled"
+      );
+    }
+
+    return prisma.deployment.findUniqueOrThrow({
+      where: { id: deploymentId },
+    });
+  }
+
   if (deployment.status !== "QUEUED") {
     throw new AppError(
       409,
-      "Only queued deployments can be cancelled"
+      `A ${deployment.status} deployment cannot be cancelled`
     );
   }
   // Remove the pending BullMQ job.
@@ -192,6 +277,8 @@ try {
     },
     data: {
       status: "CANCELLED",
+      errorMessage: "Cancelled by user",
+      finishedAt: new Date(),
     },
   });
 

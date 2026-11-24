@@ -56,6 +56,7 @@ export async function processDeployment(
   deploymentId: string,
   workerId: string,
   isLeaseLost: () => boolean,
+  signal?: AbortSignal,
 ): Promise<void> {
   const assertLease = async (): Promise<void> => {
     if (isLeaseLost()) {
@@ -105,6 +106,7 @@ export async function processDeployment(
       deploymentId,
       workerId,
       assertLease,
+      signal,
     );
 
     if (!clonedPath) {
@@ -118,6 +120,7 @@ export async function processDeployment(
       clonedPath,
       workerId,
       assertLease,
+      signal,
     );
 
     if (!buildResult) {

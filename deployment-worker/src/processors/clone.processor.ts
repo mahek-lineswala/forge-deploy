@@ -56,6 +56,7 @@ export async function cloneDeploymentRepository(
   deploymentId: string,
   workerId: string,
   assertLease: () => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   await assertLease();
 
@@ -146,6 +147,7 @@ export async function cloneDeploymentRepository(
         timeout: 120_000,
         maxBuffer: 10 * 1024 * 1024,
         windowsHide: true,
+        signal,
         env: {
           ...process.env,
           // Never fall back to an interactive prompt or the OS credential store.

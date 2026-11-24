@@ -9,6 +9,7 @@ import {
 
 import { detectBuildConfiguration } from "../services/build.service.js";
 import { runDockerBuild } from "../services/docker.service.js";
+import { loadBuildEnvironment } from "../services/environment.service.js";
 
 import { writeDeploymentLog } from "../services/deployment-log.service.js";
 
@@ -59,6 +60,7 @@ export async function processDeploymentBuild(
   sourceDir: string,
   workerId: string,
   assertLease: () => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<ProcessBuildResult | null> {
   const context = await getDeploymentContext(deploymentId);
 
@@ -129,6 +131,27 @@ const claimed = await claimDeploymentForBuilding(
       `Building ${configuration.framework} project using ${configuration.packageManager}`,
     );
 
+    const { variables: environment, skipped } = await loadBuildEnvironment(
+      context.project,
+    );
+
+    if (environment.length > 0) {
+      await writeDeploymentLog({
+        deploymentId,
+        stage: "BUILD",
+        message: `Loaded ${environment.length} environment variable(s) for the build step: ${environment.map((v) => v.key).join(", ")}`,
+      });
+    }
+
+    if (skipped.length > 0) {
+      await writeDeploymentLog({
+        deploymentId,
+        stage: "BUILD",
+        level: "WARN",
+        message: `Ignored reserved or invalid environment variable name(s): ${skipped.join(", ")}`,
+      });
+    }
+
     await assertLease();
     const buildResult = await runDockerBuild({
       deploymentId,
@@ -136,6 +159,8 @@ const claimed = await claimDeploymentForBuilding(
       rootDir: configuration.rootDir,
       installCommand: configuration.installCommand,
       buildCommand: configuration.buildCommand,
+      environment,
+      signal,
     });
     await assertLease();
 
