@@ -1,5 +1,5 @@
 
-import { Worker, type Job } from "bullmq";
+import { UnrecoverableError, Worker, type Job } from "bullmq";
 import { randomUUID } from "node:crypto";
 
 import { redis } from "./lib/redis.js";
@@ -16,6 +16,7 @@ import {
 } from "./services/deployment.service.js";
 
 import type { DeploymentJobData } from "./types/deployment.types.js";
+import { isNonRetryableError } from "./utils/errors.js";
 
 export const DEPLOYMENT_QUEUE_NAME = "deployments";
 
@@ -121,7 +122,9 @@ export const deploymentWorker = new Worker<DeploymentJobData>(
       );
     } catch (error) {
       const attempts = job.opts.attempts ?? 1;
-      const finalAttempt = job.attemptsMade + 1 >= attempts;
+      const nonRetryable = isNonRetryableError(error);
+      const finalAttempt =
+        nonRetryable || job.attemptsMade + 1 >= attempts;
 
       if (finalAttempt && !leaseLost) {
         try {
@@ -138,6 +141,11 @@ export const deploymentWorker = new Worker<DeploymentJobData>(
             failureError,
           );
         }
+      }
+
+      if (nonRetryable) {
+        // Tells BullMQ to fail the job now and skip remaining attempts.
+        throw new UnrecoverableError(error.message);
       }
 
       throw error;

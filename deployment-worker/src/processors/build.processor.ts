@@ -16,6 +16,7 @@ import {
   saveBuildMetadata,
   saveBuildFailure,
 } from "../services/deployment-metadata.service.js";
+import { NonRetryableError } from "../utils/errors.js";
 
 export interface ProcessBuildResult {
   deploymentId: string;
@@ -156,13 +157,13 @@ const claimed = await claimDeploymentForBuilding(
       relativeOutput.startsWith(`..${path.sep}`) ||
       path.isAbsolute(relativeOutput)
     ) {
-      throw new Error("Build output directory is outside the project root.");
+      throw new NonRetryableError("Build output directory is outside the project root.");
     }
 
     const outputStats = await fs.stat(outputPath).catch(() => null);
 
     if (!outputStats?.isDirectory()) {
-      throw new Error(
+      throw new NonRetryableError(
         `Build completed but output directory was not found: ${configuration.outputDir}`,
       );
     }

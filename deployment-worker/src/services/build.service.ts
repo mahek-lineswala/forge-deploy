@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { ProjectDocument } from "../types/deployment.types.js";
+import { NonRetryableError } from "../utils/errors.js";
 
 export interface BuildConfiguration {
   framework: string;
@@ -101,13 +102,13 @@ export async function detectBuildConfiguration(
     relative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relative)
   ) {
-    throw new Error("Project root directory is outside the repository.");
+    throw new NonRetryableError("Project root directory is outside the repository.");
   }
 
   const packageJsonPath = path.join(projectRoot, "package.json");
 
   if (!(await fileExists(packageJsonPath))) {
-    throw new Error("package.json was not found in the project root.");
+    throw new NonRetryableError("package.json was not found in the project root.");
   }
 
   const packageJsonContent = await fs.readFile(
@@ -115,7 +116,13 @@ export async function detectBuildConfiguration(
     "utf8",
   );
 
-  const pkg = JSON.parse(packageJsonContent) as PackageJson;
+  let pkg: PackageJson;
+
+  try {
+    pkg = JSON.parse(packageJsonContent) as PackageJson;
+  } catch {
+    throw new NonRetryableError("package.json is not valid JSON.");
+  }
 
   const files = await fs.readdir(projectRoot);
 
@@ -126,7 +133,7 @@ export async function detectBuildConfiguration(
   const buildScript = pkg.scripts?.build;
 
   if (!buildScript) {
-    throw new Error("No build script found in package.json.");
+    throw new NonRetryableError("No build script found in package.json.");
   }
 
   let installCommand: string;

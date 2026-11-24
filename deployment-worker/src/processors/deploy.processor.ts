@@ -8,9 +8,12 @@ import {
   getDeploymentContext,
   updateDeploymentStatus,
   publishDeploymentRecord,
+  supersedeOtherDeployments,
 } from "../services/deployment.service.js";
 
 import { generateDeploymentUrl } from "../services/domain.service.js";
+import { checkDeploymentHealth } from "../services/health.service.js";
+import { NonRetryableError } from "../utils/errors.js";
 import { writeDeploymentLog } from "../services/deployment-log.service.js";
 import {
   completeDeploymentMetadata,
@@ -52,7 +55,7 @@ async function rejectSymlinks(directory: string): Promise<void> {
     const fullPath = path.join(directory, entry.name);
 
     if (entry.isSymbolicLink()) {
-      throw new Error(
+      throw new NonRetryableError(
         `Build output contains an unsupported symbolic link: ${entry.name}`,
       );
     }
@@ -86,7 +89,7 @@ export async function deployStaticBuild(
   }
 
 if (!STATIC_FRAMEWORKS.has(build.framework.trim().toLowerCase())) {
-    throw new Error(
+    throw new NonRetryableError(
       `${build.framework} is not configured for static publishing. Runtime deployment support will be added separately.`,
     );
   }
@@ -145,6 +148,31 @@ const claimed = await updateDeploymentStatus(
     const deploymentUrl = generateDeploymentUrl(
       build.deploymentId,
     );
+
+    if (env.HEALTH_CHECK_ENABLED) {
+      await assertLease();
+
+      const checking = await updateDeploymentStatus(
+        build.deploymentId,
+        "HEALTH_CHECK",
+        workerId,
+      );
+
+      if (!checking) {
+        throw new Error("Could not start deployment health check.");
+      }
+
+      await logSafely(build.deploymentId, `Health check started: ${deploymentUrl}`);
+      await checkDeploymentHealth(build.deploymentId);
+      await logSafely(build.deploymentId, "Health check passed.");
+    } else {
+      await logSafely(
+        build.deploymentId,
+        "Health check skipped (HEALTH_CHECK_ENABLED=false).",
+        "WARN",
+      );
+    }
+
     await assertLease();
     const recordUpdated = await publishDeploymentRecord(
   build.deploymentId,
@@ -159,6 +187,31 @@ const claimed = await updateDeploymentStatus(
     }
 
     published = true;
+
+    try {
+      const { supersededOlder, selfSuperseded } =
+        await supersedeOtherDeployments(build.deploymentId);
+
+      if (supersededOlder > 0) {
+        await logSafely(
+          build.deploymentId,
+          `Marked ${supersededOlder} older deployment(s) as SUPERSEDED.`,
+        );
+      }
+
+      if (selfSuperseded) {
+        await logSafely(
+          build.deploymentId,
+          "A newer deployment was already READY; this deployment is SUPERSEDED.",
+          "WARN",
+        );
+      }
+    } catch (error) {
+      console.error(
+        `Could not supersede other deployments for ${build.deploymentId}:`,
+        error,
+      );
+    }
 
     try {
       await completeDeploymentMetadata(build.deploymentId);

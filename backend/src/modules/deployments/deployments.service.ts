@@ -1,6 +1,7 @@
 
 import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/app-error.js";
+import { redis } from "../../lib/redis.js";
 import { enqueueDeployment, removeQueuedDeployment } from "./deployments.queue.js";
 import type { CreateDeploymentBody } from "./deployments.schema.js";
 
@@ -40,13 +41,49 @@ export async function createDeployment(
 ) {
   await ensureProjectOwnership(userId, projectId);
 
-  const deployment = await prisma.deployment.create({
-    data: {
-      projectId,
-      commitSha: body.commitSha ?? null,
-      commitMessage: body.commitMessage ?? null,
-    },
-  });
+  // Short per-project lock so two near-simultaneous requests
+  // (double click, client retry) cannot both pass the check below.
+  const lockKey = `forgedeploy:deploy-lock:${projectId}`;
+  const locked = await redis.set(lockKey, "1", "PX", 10_000, "NX");
+
+  if (!locked) {
+    throw new AppError(
+      409,
+      "A deployment for this project is already being created"
+    );
+  }
+
+  let deployment;
+
+  try {
+    const active = await prisma.deployment.findFirst({
+      where: {
+        projectId,
+        status: {
+          in: ["QUEUED", "CLONING", "BUILDING", "DEPLOYING", "HEALTH_CHECK"],
+        },
+      },
+      select: { id: true, status: true },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (active) {
+      throw new AppError(
+        409,
+        `Deployment ${active.id} is already ${active.status} for this project`
+      );
+    }
+
+    deployment = await prisma.deployment.create({
+      data: {
+        projectId,
+        commitSha: body.commitSha ?? null,
+        commitMessage: body.commitMessage ?? null,
+      },
+    });
+  } finally {
+    await redis.del(lockKey).catch(() => undefined);
+  }
 
   try {
     await enqueueDeployment(deployment.id);

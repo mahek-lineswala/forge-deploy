@@ -13,8 +13,28 @@ import {
 
 import { getGitHubRepositoryAccess } from "../services/github.service.js";
 import { writeDeploymentLog } from "../services/deployment-log.service.js";
+import { NonRetryableError, isNonRetryableError } from "../utils/errors.js";
 
 const execFileAsync = promisify(execFile);
+
+// git stderr patterns that will fail identically on every retry.
+const PERMANENT_GIT_FAILURES = [
+  /Authentication failed/i,
+  /Invalid username or token/i,
+  /could not read Username/i,
+  /Repository not found/i,
+  /Remote branch .* not found/i,
+  /not found in upstream/i,
+];
+
+function isPermanentGitFailure(error: unknown): boolean {
+  const stderr = (error as { stderr?: string })?.stderr ?? "";
+  const message = error instanceof Error ? error.message : "";
+
+  return PERMANENT_GIT_FAILURES.some(
+    (pattern) => pattern.test(stderr) || pattern.test(message),
+  );
+}
 
 async function isValidRepository(directory: string): Promise<boolean> {
   try {
@@ -86,7 +106,7 @@ export async function cloneDeploymentRepository(
     const github = await getGitHubRepositoryAccess(context.project);
 
     if (!github.branch.trim()) {
-      throw new Error("Repository branch is missing.");
+      throw new NonRetryableError("Repository branch is missing.");
     }
 
     await assertLease();
@@ -125,8 +145,12 @@ export async function cloneDeploymentRepository(
       {
         timeout: 120_000,
         maxBuffer: 10 * 1024 * 1024,
+        windowsHide: true,
         env: {
           ...process.env,
+          // Never fall back to an interactive prompt or the OS credential store.
+          GIT_TERMINAL_PROMPT: "0",
+          GCM_INTERACTIVE: "never",
           GIT_CONFIG_COUNT: "1",
           GIT_CONFIG_KEY_0: "http.extraheader",
           GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${authHeader}`,
@@ -137,7 +161,9 @@ export async function cloneDeploymentRepository(
     await assertLease();
 
     if (!(await isValidRepository(destination))) {
-      throw new Error("Repository clone completed but workspace is invalid.");
+      throw new NonRetryableError(
+        "Repository cloned, but no package.json was found at the repository root.",
+      );
     }
 
     await writeDeploymentLog({
@@ -173,6 +199,12 @@ export async function cloneDeploymentRepository(
       );
     }
 
-    throw new Error(`GitHub repository cloning failed: ${message}`);
+    const wrapped = `GitHub repository cloning failed: ${message}`;
+
+    if (isNonRetryableError(error) || isPermanentGitFailure(error)) {
+      throw new NonRetryableError(wrapped);
+    }
+
+    throw new Error(wrapped);
   }
 }

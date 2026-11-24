@@ -330,7 +330,7 @@ export async function publishDeploymentRecord(
 
   const filter: Filter<DeploymentDocument> = {
     _id: new ObjectId(deploymentId),
-    status: "DEPLOYING",
+    status: { $in: ["DEPLOYING", "HEALTH_CHECK"] },
   };
 
   if (workerId) {
@@ -351,6 +351,65 @@ export async function publishDeploymentRecord(
   return result.matchedCount === 1;
 }
 
+
+/**
+ * Keeps one live deployment per project: the newest READY one.
+ * - Older READY deployments of the same project become SUPERSEDED.
+ * - If a newer deployment is already READY (this one finished late),
+ *   this deployment is superseded instead.
+ * Safe when two publishes race: both orders converge on the newest.
+ */
+export async function supersedeOtherDeployments(
+  deploymentId: string,
+): Promise<{ supersededOlder: number; selfSuperseded: boolean }> {
+  const collection = getDatabase().collection<DeploymentDocument>(
+    DEPLOYMENTS_COLLECTION,
+  );
+
+  const current = await collection.findOne(
+    { _id: new ObjectId(deploymentId) },
+    { projection: { projectId: 1, createdAt: 1 } },
+  );
+
+  if (!current) {
+    return { supersededOlder: 0, selfSuperseded: false };
+  }
+
+  const now = new Date();
+
+  const older = await collection.updateMany(
+    {
+      projectId: current.projectId,
+      _id: { $ne: current._id },
+      status: "READY",
+      createdAt: { $lt: current.createdAt },
+    },
+    { $set: { status: "SUPERSEDED", updatedAt: now } },
+  );
+
+  const newerReady = await collection.findOne(
+    {
+      projectId: current.projectId,
+      _id: { $ne: current._id },
+      status: "READY",
+      createdAt: { $gt: current.createdAt },
+    },
+    { projection: { _id: 1 } },
+  );
+
+  let selfSuperseded = false;
+
+  if (newerReady) {
+    const self = await collection.updateOne(
+      { _id: current._id, status: "READY" },
+      { $set: { status: "SUPERSEDED", updatedAt: now } },
+    );
+
+    selfSuperseded = self.modifiedCount === 1;
+  }
+
+  return { supersededOlder: older.modifiedCount, selfSuperseded };
+}
 
 export async function markDeploymentFailed(
   deploymentId: string,

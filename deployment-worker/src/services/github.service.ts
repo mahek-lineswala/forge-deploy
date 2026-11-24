@@ -5,6 +5,7 @@ import { ObjectId } from "mongodb";
 
 import { env } from "../config/env.js";
 import { getDatabase } from "../lib/mongodb.js";
+import { NonRetryableError } from "../utils/errors.js";
 
 import type {
   ProjectDocument,
@@ -21,7 +22,7 @@ function decryptAccessToken(encryptedValue: string): string {
   const parts = encryptedValue.split(":");
 
   if (parts.length !== 4 || parts[0] !== "v1") {
-    throw new Error("Invalid encrypted GitHub access token format.");
+    throw new NonRetryableError("Invalid encrypted GitHub access token format.");
   }
 
   const [, ivHex, authTagHex, ciphertextHex] = parts;
@@ -31,14 +32,21 @@ function decryptAccessToken(encryptedValue: string): string {
   const authTag = Buffer.from(authTagHex!, "hex");
   const ciphertext = Buffer.from(ciphertextHex!, "hex");
 
-  const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
 
-  decipher.setAuthTag(authTag);
+    decipher.setAuthTag(authTag);
 
-  return Buffer.concat([
-    decipher.update(ciphertext),
-    decipher.final(),
-  ]).toString("utf8");
+    return Buffer.concat([
+      decipher.update(ciphertext),
+      decipher.final(),
+    ]).toString("utf8");
+  } catch {
+    // Wrong ENCRYPTION_KEY or corrupted value: retrying cannot help.
+    throw new NonRetryableError(
+      "Could not decrypt the GitHub access token. Check that backend and worker use the same ENCRYPTION_KEY.",
+    );
+  }
 }
 
 function normalizeRepositoryUrl(repository: string): string {
@@ -54,7 +62,7 @@ function normalizeRepositoryUrl(repository: string): string {
     url.protocol !== "https:" ||
     url.hostname !== "github.com"
   ) {
-    throw new Error("Only GitHub HTTPS repositories are supported.");
+    throw new NonRetryableError("Only GitHub HTTPS repositories are supported.");
   }
 
   const segments = url.pathname
@@ -63,7 +71,7 @@ function normalizeRepositoryUrl(repository: string): string {
     .filter(Boolean);
 
   if (segments.length !== 2) {
-    throw new Error("Invalid GitHub repository URL.");
+    throw new NonRetryableError("Invalid GitHub repository URL.");
   }
 
   return `https://github.com/${segments[0]}/${segments[1]}.git`;
@@ -75,7 +83,7 @@ export async function getGitHubRepositoryAccess(
   const userId = project.userId;
 
   if (!ObjectId.isValid(userId)) {
-    throw new Error("Invalid project owner ID.");
+    throw new NonRetryableError("Invalid project owner ID.");
   }
 
   const connection = await getDatabase()
@@ -85,7 +93,7 @@ export async function getGitHubRepositoryAccess(
     });
 
   if (!connection) {
-    throw new Error(
+    throw new NonRetryableError(
       "The project owner has not connected a GitHub account.",
     );
   }

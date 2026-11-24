@@ -22,6 +22,11 @@ const envSchema = z.object({
 
   DEPLOYMENT_BASE_URL: z.string().url().default("http://localhost:8080"),
 
+  HEALTH_CHECK_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+
   MAX_CONCURRENT_DEPLOYMENTS: z.coerce
     .number()
     .int()
