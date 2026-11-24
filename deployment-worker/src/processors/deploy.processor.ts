@@ -34,11 +34,12 @@ async function logSafely(
   deploymentId: string,
   message: string,
   level: "INFO" | "WARN" | "ERROR" = "INFO",
+  stage: "DEPLOY" | "HEALTH_CHECK" = "DEPLOY",
 ): Promise<void> {
   try {
     await writeDeploymentLog({
       deploymentId,
-      stage: "DEPLOY",
+      stage,
       message,
       level,
     });
@@ -154,9 +155,14 @@ const claimed = await updateDeploymentStatus(
         throw new Error("Could not start deployment health check.");
       }
 
-      await logSafely(build.deploymentId, `Health check started: ${deploymentUrl}`);
+      await logSafely(
+        build.deploymentId,
+        `Health check started: ${deploymentUrl}`,
+        "INFO",
+        "HEALTH_CHECK",
+      );
       await checkDeploymentHealth(build.deploymentId);
-      await logSafely(build.deploymentId, "Health check passed.");
+      await logSafely(build.deploymentId, "Health check passed.", "INFO", "HEALTH_CHECK");
     } else {
       await logSafely(
         build.deploymentId,

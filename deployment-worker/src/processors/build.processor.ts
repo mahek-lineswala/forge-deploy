@@ -30,6 +30,7 @@ export interface ProcessBuildResult {
 async function persistBuildOutput(
   deploymentId: string,
   output: string,
+  stage: "INSTALL" | "BUILD" = "BUILD",
 ): Promise<void> {
   const maxOutputLength = 50_000;
   const truncatedOutput = output.slice(-maxOutputLength);
@@ -38,9 +39,9 @@ async function persistBuildOutput(
   if (output.length > maxOutputLength) {
     await writeDeploymentLog({
       deploymentId,
-      stage: "BUILD",
+      stage,
       level: "WARN",
-      message: "Build output was truncated to the latest 50,000 characters.",
+      message: "Output was truncated to the latest 50,000 characters.",
     });
   }
 
@@ -49,7 +50,7 @@ async function persistBuildOutput(
 
     await writeDeploymentLog({
       deploymentId,
-      stage: "BUILD",
+      stage,
       message: chunk,
     });
   }
@@ -164,13 +165,10 @@ const claimed = await claimDeploymentForBuilding(
     });
     await assertLease();
 
-    await persistBuildOutput(deploymentId, buildResult.output);
-
-    await writeDeploymentLog({
-      deploymentId,
-      stage: "INSTALL",
-      message: "Build container completed its dependency installation and build commands.",
-    });
+    // Each container's output is stored under its own stage (INSTALL, then BUILD).
+    for (const phase of buildResult.phases) {
+      await persistBuildOutput(deploymentId, phase.output, phase.stage);
+    }
 
     const projectRoot = path.resolve(sourceDir, configuration.rootDir);
     const outputPath = path.resolve(projectRoot, configuration.outputDir);

@@ -32,8 +32,14 @@ export interface DockerBuildOptions {
   signal?: AbortSignal;
 }
 
+export interface DockerBuildPhaseOutput {
+  stage: "INSTALL" | "BUILD";
+  output: string;
+}
+
 export interface DockerBuildResult {
   output: string;
+  phases: DockerBuildPhaseOutput[];
   durationMs: number;
 }
 
@@ -73,6 +79,7 @@ async function removeContainer(name: string): Promise<void> {
 }
 
 interface ContainerRun {
+  label: string;
   name: string;
   network: "bridge" | "none";
   command: string;
@@ -133,7 +140,7 @@ async function runContainer(run: ContainerRun): Promise<string> {
       );
     }
 
-    throw new Error(`Docker build failed: ${execError.message}\n${logs}`);
+    throw new Error(`${run.label} failed: ${execError.message}\n${logs}`);
   } finally {
     await removeContainer(run.name);
   }
@@ -159,7 +166,7 @@ export async function runDockerBuild(
   const startedAt = Date.now();
   const remaining = () => Math.max(1_000, BUILD_TIMEOUT - (Date.now() - startedAt));
 
-  const outputs: string[] = [];
+  const phases: DockerBuildPhaseOutput[] = [];
 
   // Project env vars go in a read-only mount OUTSIDE the workspace, so they
   // never end up in the build output, and only the build step loads them.
@@ -178,8 +185,10 @@ export async function runDockerBuild(
   try {
     if (env.BUILD_NETWORK_ISOLATION) {
       // Phase 1: install with network access.
-      outputs.push(
-        await runContainer({
+      phases.push({
+        stage: "INSTALL",
+        output: await runContainer({
+          label: "Dependency installation",
           name: `${BUILD_CONTAINER_PREFIX}${deploymentId}-${attempt}-install`,
           network: "bridge",
           command: installCommand,
@@ -187,11 +196,13 @@ export async function runDockerBuild(
           projectRoot,
           signal,
         }),
-      );
+      });
 
       // Phase 2: run project build scripts with no network at all.
-      outputs.push(
-        await runContainer({
+      phases.push({
+        stage: "BUILD",
+        output: await runContainer({
+          label: "Build",
           name: `${BUILD_CONTAINER_PREFIX}${deploymentId}-${attempt}-build`,
           network: "none",
           command: buildStep,
@@ -200,10 +211,12 @@ export async function runDockerBuild(
           secretsDir,
           signal,
         }),
-      );
+      });
     } else {
-      outputs.push(
-        await runContainer({
+      phases.push({
+        stage: "BUILD",
+        output: await runContainer({
+          label: "Docker build",
           name: `${BUILD_CONTAINER_PREFIX}${deploymentId}-${attempt}`,
           network: "bridge",
           command: `${installCommand} && ${buildStep}`,
@@ -212,7 +225,7 @@ export async function runDockerBuild(
           secretsDir,
           signal,
         }),
-      );
+      });
     }
   } catch (error) {
     // Build tools sometimes echo env values in errors; never persist them.
@@ -225,8 +238,14 @@ export async function runDockerBuild(
     }
   }
 
+  const redactedPhases = phases.map((phase) => ({
+    stage: phase.stage,
+    output: redactSecrets(phase.output, environment),
+  }));
+
   return {
-    output: redactSecrets(outputs.filter(Boolean).join("\n"), environment),
+    output: redactedPhases.map((phase) => phase.output).filter(Boolean).join("\n"),
+    phases: redactedPhases,
     durationMs: Date.now() - startedAt,
   };
 }
