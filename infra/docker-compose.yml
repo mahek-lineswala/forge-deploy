@@ -1,26 +1,37 @@
-# Local infrastructure: Redis (queue) + Nginx (static deployments).
+# Local infrastructure: Redis (job queue) + Nginx (serves static and runtime deployments).
 #   docker compose -f infra/docker-compose.yml up -d     start
 #   docker compose -f infra/docker-compose.yml stop      stop
+# Ports bind to 127.0.0.1 only. Runtime containers join "forgedeploy-network" so Nginx can reach them.
 services:
   redis:
     image: redis:7-alpine
     container_name: forgedeploy-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]   # queue survives restarts
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "127.0.0.1:6379:6379"   # local machine only
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
+    networks:
+      - forgedeploy-network
 
   nginx:
     image: nginx:1.27-alpine
     container_name: forgedeploy-nginx
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:80"   # local machine only, not your LAN
+      - "127.0.0.1:8080:80"
     volumes:
       - ../deployment-worker/deployments:/srv/deployments:ro
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../deployment-worker/runtime-nginx:/etc/nginx/runtime:ro
+    networks:
+      - forgedeploy-network
 
 volumes:
   redis-data:
+
+networks:
+  forgedeploy-network:
+    name: forgedeploy-network
+    driver: bridge

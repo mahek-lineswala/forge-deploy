@@ -1,4 +1,7 @@
-
+/**
+ * Pipeline stage 3 (static sites): atomically publish build output, health-check it
+ * through Nginx and mark the deployment READY.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -9,19 +12,19 @@ import {
   updateDeploymentStatus,
   publishDeploymentRecord,
   supersedeOtherDeployments,
-} from "../services/deployment.service.js";
+} from "../services/deployment/deployment.service.js";
 
-import { generateDeploymentUrl } from "../services/domain.service.js";
-import { checkDeploymentHealth } from "../services/health.service.js";
+import { generateDeploymentUrl } from "../services/hosting/domain.service.js";
+import { checkDeploymentHealth } from "../services/hosting/health.service.js";
 import { NonRetryableError } from "../utils/errors.js";
-import { publishDirectoryAtomically } from "../services/publish.service.js";
-import { writeDeploymentLog } from "../services/deployment-log.service.js";
+import { publishDirectoryAtomically } from "../services/hosting/static-publish.service.js";
+import { writeDeploymentLogSafely } from "../services/deployment/deployment-log.service.js";
 import {
   completeDeploymentMetadata,
   saveBuildFailure,
-} from "../services/deployment-metadata.service.js";
+} from "../services/deployment/deployment-metadata.service.js";
 
-import type { ProcessBuildResult } from "./build.processor.js";
+import type { StaticBuildResult } from "../types/build.types.js";
 
 const STATIC_FRAMEWORKS = new Set([
   "vite",
@@ -29,24 +32,6 @@ const STATIC_FRAMEWORKS = new Set([
   "vue",
   "angular",
 ]);
-
-async function logSafely(
-  deploymentId: string,
-  message: string,
-  level: "INFO" | "WARN" | "ERROR" = "INFO",
-  stage: "DEPLOY" | "HEALTH_CHECK" = "DEPLOY",
-): Promise<void> {
-  try {
-    await writeDeploymentLog({
-      deploymentId,
-      stage,
-      message,
-      level,
-    });
-  } catch (error) {
-    console.error("Could not persist deployment log:", error);
-  }
-}
 
 async function rejectSymlinks(directory: string): Promise<void> {
   const entries = await fs.readdir(directory, {
@@ -69,7 +54,7 @@ async function rejectSymlinks(directory: string): Promise<void> {
 }
 
 export async function deployStaticBuild(
-  build: ProcessBuildResult,
+  build: StaticBuildResult,
   workerId: string,
   assertLease: () => Promise<void>,
 ): Promise<string | null> {
@@ -90,7 +75,7 @@ export async function deployStaticBuild(
     return null;
   }
 
-if (!STATIC_FRAMEWORKS.has(build.framework.trim().toLowerCase())) {
+  if (!STATIC_FRAMEWORKS.has(build.framework.trim().toLowerCase())) {
     throw new NonRetryableError(
       `${build.framework} is not configured for static publishing. Runtime deployment support will be added separately.`,
     );
@@ -105,19 +90,19 @@ if (!STATIC_FRAMEWORKS.has(build.framework.trim().toLowerCase())) {
   await fs.access(source);
   await rejectSymlinks(source);
 
- await assertLease();
+  await assertLease();
 
-const claimed = await updateDeploymentStatus(
-  build.deploymentId,
-  "DEPLOYING",
-  workerId,
-);
+  const claimed = await updateDeploymentStatus(
+    build.deploymentId,
+    "DEPLOYING",
+    workerId,
+  );
 
   if (!claimed) {
     throw new Error("Could not start deployment publishing.");
   }
 
-  await logSafely(
+  await writeDeploymentLogSafely(
     build.deploymentId,
     "Static deployment publishing started.",
   );
@@ -126,6 +111,7 @@ const claimed = await updateDeploymentStatus(
 
   try {
     await assertLease();
+
     await publishDirectoryAtomically(
       source,
       destination,
@@ -133,7 +119,7 @@ const claimed = await updateDeploymentStatus(
       assertLease,
     );
 
-    await logSafely(
+    await writeDeploymentLogSafely(
       build.deploymentId,
       "Static build files copied successfully.",
     );
@@ -155,16 +141,23 @@ const claimed = await updateDeploymentStatus(
         throw new Error("Could not start deployment health check.");
       }
 
-      await logSafely(
+      await writeDeploymentLogSafely(
         build.deploymentId,
         `Health check started: ${deploymentUrl}`,
         "INFO",
         "HEALTH_CHECK",
       );
+
       await checkDeploymentHealth(build.deploymentId);
-      await logSafely(build.deploymentId, "Health check passed.", "INFO", "HEALTH_CHECK");
+
+      await writeDeploymentLogSafely(
+        build.deploymentId,
+        "Health check passed.",
+        "INFO",
+        "HEALTH_CHECK",
+      );
     } else {
-      await logSafely(
+      await writeDeploymentLogSafely(
         build.deploymentId,
         "Health check skipped (HEALTH_CHECK_ENABLED=false).",
         "WARN",
@@ -172,11 +165,12 @@ const claimed = await updateDeploymentStatus(
     }
 
     await assertLease();
+
     const recordUpdated = await publishDeploymentRecord(
-  build.deploymentId,
-  deploymentUrl,
-  workerId,
-);
+      build.deploymentId,
+      deploymentUrl,
+      workerId,
+    );
 
     if (!recordUpdated) {
       throw new Error(
@@ -191,14 +185,14 @@ const claimed = await updateDeploymentStatus(
         await supersedeOtherDeployments(build.deploymentId);
 
       if (supersededOlder > 0) {
-        await logSafely(
+        await writeDeploymentLogSafely(
           build.deploymentId,
           `Marked ${supersededOlder} older deployment(s) as SUPERSEDED.`,
         );
       }
 
       if (selfSuperseded) {
-        await logSafely(
+        await writeDeploymentLogSafely(
           build.deploymentId,
           "A newer deployment was already READY; this deployment is SUPERSEDED.",
           "WARN",
@@ -219,14 +213,14 @@ const claimed = await updateDeploymentStatus(
         error,
       );
 
-      await logSafely(
+      await writeDeploymentLogSafely(
         build.deploymentId,
         "Deployment is READY, but completion metadata could not be saved.",
         "WARN",
       );
     }
 
-    await logSafely(
+    await writeDeploymentLogSafely(
       build.deploymentId,
       `Deployment published successfully: ${deploymentUrl}`,
     );
@@ -255,14 +249,14 @@ const claimed = await updateDeploymentStatus(
         }).catch(() => undefined);
       }
 
-     try {
-  await assertLease();
-  await saveBuildFailure(build.deploymentId, message);
-} catch (metadataError) {
-  console.error("Could not persist deployment failure:", metadataError);
-}
+      try {
+        await assertLease();
+        await saveBuildFailure(build.deploymentId, message);
+      } catch (metadataError) {
+        console.error("Could not persist deployment failure:", metadataError);
+      }
 
-      await logSafely(
+      await writeDeploymentLogSafely(
         build.deploymentId,
         `Deployment publishing failed: ${message}`,
         "ERROR",

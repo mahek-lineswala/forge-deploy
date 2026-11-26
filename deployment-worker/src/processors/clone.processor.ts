@@ -1,4 +1,6 @@
-
+/**
+ * Pipeline stage 1: shallow-clone the project's branch into this attempt's temp folder.
+ */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
@@ -9,10 +11,10 @@ import { env } from "../config/env.js";
 import {
   getDeploymentContext,
   claimDeploymentForCloning,
-} from "../services/deployment.service.js";
+} from "../services/deployment/deployment.service.js";
 
 import { getGitHubRepositoryAccess } from "../services/github.service.js";
-import { writeDeploymentLog } from "../services/deployment-log.service.js";
+import { writeDeploymentLog } from "../services/deployment/deployment-log.service.js";
 import { NonRetryableError, isNonRetryableError } from "../utils/errors.js";
 
 const execFileAsync = promisify(execFile);

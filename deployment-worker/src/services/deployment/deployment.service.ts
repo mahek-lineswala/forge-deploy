@@ -1,17 +1,20 @@
-
+/**
+ * Deployment state in MongoDB: worker leases, guarded status transitions,
+ * publishing and superseding.
+ */
 import { ObjectId, type Filter } from "mongodb";
 
-import { getDatabase } from "../lib/mongodb.js";
+import { ACTIVE_DEPLOYMENT_STATUSES } from "../../constants/deployment-status.js";
+import { COLLECTIONS } from "../../constants/collections.js";
+import { getDatabase } from "../../lib/mongodb.js";
 
 import type {
   DeploymentContext,
   DeploymentStatus,
   DeploymentDocument,
   ProjectDocument,
-} from "../types/deployment.types.js";
+} from "../../types/deployment.types.js";
 
-const DEPLOYMENTS_COLLECTION = "Deployment";
-const PROJECTS_COLLECTION = "Project";
 
 export const DEPLOYMENT_LEASE_DURATION_MS = 90_000;
 
@@ -25,7 +28,7 @@ export async function getDeploymentContext(
   const db = getDatabase();
 
   const deployment = await db
-    .collection<DeploymentDocument>(DEPLOYMENTS_COLLECTION)
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
     .findOne({ _id: new ObjectId(deploymentId) });
 
   if (!deployment) {
@@ -33,7 +36,7 @@ export async function getDeploymentContext(
   }
 
   const project = await db
-    .collection<ProjectDocument>(PROJECTS_COLLECTION)
+    .collection<ProjectDocument>(COLLECTIONS.projects)
     .findOne({ _id: deployment.projectId });
 
   if (!project) {
@@ -51,7 +54,7 @@ export async function getDeploymentStatus(
   }
 
   const deployment = await getDatabase()
-    .collection<DeploymentDocument>(DEPLOYMENTS_COLLECTION)
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
     .findOne(
       { _id: new ObjectId(deploymentId) },
       { projection: { status: 1 } },
@@ -78,18 +81,12 @@ export async function claimDeploymentLease(
   );
 
   const result = await getDatabase()
-    .collection<DeploymentDocument>(DEPLOYMENTS_COLLECTION)
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
     .updateOne(
       {
         _id: new ObjectId(deploymentId),
         status: {
-          $in: [
-            "QUEUED",
-            "CLONING",
-            "BUILDING",
-            "DEPLOYING",
-            "HEALTH_CHECK",
-          ],
+          $in: [...ACTIVE_DEPLOYMENT_STATUSES],
         },
         $or: [
           { workerId: null },
@@ -129,20 +126,14 @@ export async function renewDeploymentLease(
   const now = new Date();
 
   const result = await getDatabase()
-    .collection<DeploymentDocument>(DEPLOYMENTS_COLLECTION)
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
     .updateOne(
       {
         _id: new ObjectId(deploymentId),
         workerId,
         leaseExpiresAt: { $gt: now },
         status: {
-          $in: [
-            "QUEUED",
-            "CLONING",
-            "BUILDING",
-            "DEPLOYING",
-            "HEALTH_CHECK",
-          ],
+          $in: [...ACTIVE_DEPLOYMENT_STATUSES],
         },
       },
       {
@@ -172,20 +163,14 @@ export async function ownsDeploymentLease(
   const now = new Date();
 
   const deployment = await getDatabase()
-    .collection<DeploymentDocument>(DEPLOYMENTS_COLLECTION)
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
     .findOne(
       {
         _id: new ObjectId(deploymentId),
         workerId,
         leaseExpiresAt: { $gt: now },
         status: {
-          $in: [
-            "QUEUED",
-            "CLONING",
-            "BUILDING",
-            "DEPLOYING",
-            "HEALTH_CHECK",
-          ],
+          $in: [...ACTIVE_DEPLOYMENT_STATUSES],
         },
       },
       { projection: { _id: 1 } },
@@ -207,7 +192,7 @@ export async function releaseDeploymentLease(
   }
 
   const result = await getDatabase()
-    .collection<DeploymentDocument>(DEPLOYMENTS_COLLECTION)
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
     .updateOne(
       {
         _id: new ObjectId(deploymentId),
@@ -245,7 +230,7 @@ export async function updateDeploymentStatus(
   }
 
   const result = await getDatabase()
-    .collection<DeploymentDocument>(DEPLOYMENTS_COLLECTION)
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
     .updateOne(
       filter,
       {
@@ -278,7 +263,7 @@ export async function claimDeploymentForCloning(
   }
 
   const result = await getDatabase()
-    .collection<DeploymentDocument>(DEPLOYMENTS_COLLECTION)
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
     .updateOne(filter, {
       $set: {
         status: "CLONING",
@@ -308,7 +293,7 @@ export async function claimDeploymentForBuilding(
   }
 
   const result = await getDatabase()
-    .collection<DeploymentDocument>(DEPLOYMENTS_COLLECTION)
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
     .updateOne(filter, {
       $set: {
         status: "BUILDING",
@@ -339,7 +324,7 @@ export async function publishDeploymentRecord(
   }
 
   const result = await getDatabase()
-    .collection<DeploymentDocument>(DEPLOYMENTS_COLLECTION)
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
     .updateOne(filter, {
       $set: {
         status: "READY",
@@ -350,6 +335,46 @@ export async function publishDeploymentRecord(
 
   return result.matchedCount === 1;
 }
+
+export async function saveRuntimeContainerMetadata(
+  deploymentId: string,
+  containerId: string,
+  port: number,
+  workerId: string,
+): Promise<boolean> {
+  if (
+    !ObjectId.isValid(deploymentId) ||
+    !/^[a-f0-9]{12,64}$/i.test(containerId) ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65535 ||
+    !workerId
+  ) {
+    return false;
+  }
+
+  const result = await getDatabase()
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
+    .updateOne(
+      {
+        _id: new ObjectId(deploymentId),
+        workerId,
+        leaseExpiresAt: { $gt: new Date() },
+        status: { $in: ["DEPLOYING", "HEALTH_CHECK"] },
+      },
+      {
+        $set: {
+          deploymentType: "RUNTIME",
+          runtimeContainerId: containerId,
+          runtimePort: port,
+          updatedAt: new Date(),
+        },
+      },
+    );
+
+  return result.matchedCount === 1;
+}
+
 
 
 /**
@@ -363,7 +388,7 @@ export async function supersedeOtherDeployments(
   deploymentId: string,
 ): Promise<{ supersededOlder: number; selfSuperseded: boolean }> {
   const collection = getDatabase().collection<DeploymentDocument>(
-    DEPLOYMENTS_COLLECTION,
+    COLLECTIONS.deployments,
   );
 
   const current = await collection.findOne(
@@ -423,20 +448,14 @@ export async function markDeploymentFailed(
   const now = new Date();
 
   const result = await getDatabase()
-    .collection<DeploymentDocument>(DEPLOYMENTS_COLLECTION)
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
     .updateOne(
       {
         _id: new ObjectId(deploymentId),
         workerId,
         leaseExpiresAt: { $gt: now },
         status: {
-          $in: [
-            "QUEUED",
-            "CLONING",
-            "BUILDING",
-            "DEPLOYING",
-            "HEALTH_CHECK",
-          ],
+          $in: [...ACTIVE_DEPLOYMENT_STATUSES],
         },
       },
       {
@@ -473,20 +492,14 @@ export async function restartDeploymentForAttempt(
   const now = new Date();
 
   const result = await getDatabase()
-    .collection<DeploymentDocument>(DEPLOYMENTS_COLLECTION)
+    .collection<DeploymentDocument>(COLLECTIONS.deployments)
     .updateOne(
       {
         _id: new ObjectId(deploymentId),
         workerId,
         leaseExpiresAt: { $gt: now },
         status: {
-          $in: [
-            "QUEUED",
-            "CLONING",
-            "BUILDING",
-            "DEPLOYING",
-            "HEALTH_CHECK",
-          ],
+          $in: [...ACTIVE_DEPLOYMENT_STATUSES],
         },
       },
       {
@@ -502,6 +515,10 @@ export async function restartDeploymentForAttempt(
           startedAt: now,
           finishedAt: null,
           updatedAt: now,
+          deploymentType: null,
+          startCommand: null,
+          runtimeContainerId: null,
+          runtimePort: null,  
         },
       },
     );

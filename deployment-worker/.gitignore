@@ -8,3 +8,5 @@ temp/*
 logs/*
 !logs/.gitkeep
 deployments/
+runtime-nginx/*
+!runtime-nginx/.gitkeep

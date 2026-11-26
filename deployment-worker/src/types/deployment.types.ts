@@ -1,4 +1,6 @@
-
+/**
+ * MongoDB document shapes shared with the backend's Prisma schema.
+ */
 import type { ObjectId } from "mongodb";
 
 export type DeploymentStatus =
@@ -34,6 +36,10 @@ export interface DeploymentDocument {
   buildCommand: string | null;
   packageManager: string | null;
   outputDir: string | null;
+  deploymentType: "STATIC" | "RUNTIME" | null;
+  startCommand: string | null;
+  runtimeContainerId: string | null;
+  runtimePort: number | null;
   buildDurationMs: number | null;
 
   // Error and lifecycle metadata

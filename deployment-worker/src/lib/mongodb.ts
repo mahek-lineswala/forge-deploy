@@ -1,3 +1,6 @@
+/**
+ * MongoDB client shared by the worker.
+ */
 import { MongoClient, Db } from "mongodb";
 import { env } from "../config/env.js";
 

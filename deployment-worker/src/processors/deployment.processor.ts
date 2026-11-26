@@ -1,32 +1,31 @@
-
+/**
+ * Runs one deployment attempt end to end:
+ *   clone → build (in a Docker volume) → publish (static files or runtime container)
+ * and always cleans up this attempt's workspace afterwards.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { env } from "../config/env.js";
-
+import { TERMINAL_DEPLOYMENT_STATUSES } from "../constants/deployment-status.js";
+import { removeWorkspaceVolume } from "../services/build/build-sandbox.service.js";
 import {
   getDeploymentContext,
   ownsDeploymentLease,
   restartDeploymentForAttempt,
-} from "../services/deployment.service.js";
+} from "../services/deployment/deployment.service.js";
 
-import { cloneDeploymentRepository } from "./clone.processor.js";
 import { processDeploymentBuild } from "./build.processor.js";
-import { deployStaticBuild } from "./deploy.processor.js";
+import { cloneDeploymentRepository } from "./clone.processor.js";
+import { deployRuntimeBuild } from "./runtime-deploy.processor.js";
+import { deployStaticBuild } from "./static-deploy.processor.js";
 
 async function cleanupWorkspace(
   deploymentId: string,
   workerId: string,
 ): Promise<void> {
-  const deploymentDirectory = path.resolve(
-    env.TEMP_DIR,
-    deploymentId,
-  );
-
-  const workspaceDirectory = path.resolve(
-    deploymentDirectory,
-    workerId,
-  );
+  const deploymentDirectory = path.resolve(env.TEMP_DIR, deploymentId);
+  const workspaceDirectory = path.resolve(deploymentDirectory, workerId);
 
   try {
     // Delete only this worker attempt's workspace.
@@ -40,6 +39,9 @@ async function cleanupWorkspace(
     console.log(
       `[Worker] Cleaned workspace for deployment ${deploymentId}, attempt ${workerId}`,
     );
+
+    // The build ran in a Docker volume; the runtime image (if any) is already committed.
+    await removeWorkspaceVolume(deploymentId, workerId);
 
     // Remove the deployment directory only if it is empty.
     // Other concurrent attempts are therefore protected.
@@ -79,27 +81,18 @@ export async function processDeployment(
       throw new Error("Deployment or project not found.");
     }
 
-    const terminalStatuses = [
-      "READY",
-      "FAILED",
-      "CANCELLED",
-      "SUPERSEDED",
-    ];
-
-    if (terminalStatuses.includes(context.deployment.status)) {
+    if (TERMINAL_DEPLOYMENT_STATUSES.has(context.deployment.status)) {
       console.log(`Deployment ${deploymentId} is already terminal.`);
       return;
     }
 
-    const restarted = await restartDeploymentForAttempt(
-      deploymentId,
-      workerId,
-    );
+    const restarted = await restartDeploymentForAttempt(deploymentId, workerId);
 
     if (!restarted) {
       throw new Error("Could not restart deployment attempt.");
     }
 
+    // 1. Clone
     await assertLease();
 
     const clonedPath = await cloneDeploymentRepository(
@@ -113,6 +106,7 @@ export async function processDeployment(
       throw new Error("Repository cloning did not complete.");
     }
 
+    // 2. Build
     await assertLease();
 
     const buildResult = await processDeploymentBuild(
@@ -127,13 +121,13 @@ export async function processDeployment(
       throw new Error("Deployment build did not complete.");
     }
 
+    // 3. Publish
     await assertLease();
 
-    const deploymentUrl = await deployStaticBuild(
-      buildResult,
-      workerId,
-      assertLease,
-    );
+    const deploymentUrl =
+      buildResult.deploymentType === "STATIC"
+        ? await deployStaticBuild(buildResult, workerId, assertLease)
+        : await deployRuntimeBuild(buildResult, workerId, assertLease, signal);
 
     if (!deploymentUrl) {
       throw new Error("Deployment publishing did not complete.");

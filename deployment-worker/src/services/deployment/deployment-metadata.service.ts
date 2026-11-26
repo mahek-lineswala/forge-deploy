@@ -1,14 +1,18 @@
-
+/**
+ * Build/deployment metadata fields on the Deployment document.
+ */
 import { ObjectId } from "mongodb";
-import { getDatabase } from "../lib/mongodb.js";
+import { COLLECTIONS } from "../../constants/collections.js";
+import { getDatabase } from "../../lib/mongodb.js";
 
-const DEPLOYMENTS_COLLECTION = "Deployment";
 
 interface BuildMetadata {
   framework: string;
   buildCommand: string;
   packageManager: string;
   outputDir: string;
+  deploymentType?: "STATIC" | "RUNTIME";
+  startCommand?: string | null;
   buildDurationMs?: number;
 }
 
@@ -21,7 +25,7 @@ export async function saveBuildMetadata(
   }
 
   await getDatabase()
-    .collection(DEPLOYMENTS_COLLECTION)
+    .collection(COLLECTIONS.deployments)
     .updateOne(
       { _id: new ObjectId(deploymentId) },
       {
@@ -30,6 +34,12 @@ export async function saveBuildMetadata(
           buildCommand: metadata.buildCommand,
           packageManager: metadata.packageManager,
           outputDir: metadata.outputDir,
+          ...(metadata.deploymentType !== undefined
+            ? { deploymentType: metadata.deploymentType }
+            : {}),
+          ...(metadata.startCommand !== undefined
+            ? { startCommand: metadata.startCommand }
+            : {}),
           ...(metadata.buildDurationMs !== undefined
             ? { buildDurationMs: metadata.buildDurationMs }
             : {}),
@@ -51,38 +61,13 @@ export async function saveBuildFailure(
   }
 
   await getDatabase()
-    .collection(DEPLOYMENTS_COLLECTION)
+    .collection(COLLECTIONS.deployments)
     .updateOne(
       { _id: new ObjectId(deploymentId) },
       {
         $set: {
           errorMessage: errorMessage.slice(0, 10_000),
           updatedAt: new Date(),
-        },
-      },
-    );
-}
-
-export async function completeBuildMetadata(
-  deploymentId: string,
-  durationMs: number,
-): Promise<void> {
-  if (!ObjectId.isValid(deploymentId)) {
-    throw new Error("Invalid deployment ID.");
-  }
-
-  await getDatabase()
-    .collection(DEPLOYMENTS_COLLECTION)
-    .updateOne(
-      { _id: new ObjectId(deploymentId) },
-      {
-        $set: {
-          buildDurationMs: durationMs,
-          finishedAt: new Date(),
-          updatedAt: new Date(),
-        },
-        $unset: {
-          errorMessage: "",
         },
       },
     );
@@ -96,7 +81,7 @@ export async function completeDeploymentMetadata(
   }
 
   await getDatabase()
-    .collection(DEPLOYMENTS_COLLECTION)
+    .collection(COLLECTIONS.deployments)
     .updateOne(
       { _id: new ObjectId(deploymentId), status: "READY" },
       {
@@ -110,4 +95,3 @@ export async function completeDeploymentMetadata(
       },
     );
 }
-

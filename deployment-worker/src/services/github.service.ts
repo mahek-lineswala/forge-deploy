@@ -1,6 +1,9 @@
-
+/**
+ * GitHub access for cloning: the owner's decrypted token and normalized repo URL.
+ */
 import { ObjectId } from "mongodb";
 
+import { COLLECTIONS } from "../constants/collections.js";
 import { getDatabase } from "../lib/mongodb.js";
 import { decryptSecret } from "../lib/encryption.js";
 import { NonRetryableError } from "../utils/errors.js";
@@ -58,7 +61,7 @@ export async function getGitHubRepositoryAccess(
   }
 
   const connection = await getDatabase()
-    .collection<GitHubConnectionDocument>("GitHubConnection")
+    .collection<GitHubConnectionDocument>(COLLECTIONS.gitHubConnections)
     .findOne({
       userId,
     });

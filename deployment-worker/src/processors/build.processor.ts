@@ -1,30 +1,32 @@
-
+/**
+ * Pipeline stage 2: detect build settings, run the sandboxed install/build and record
+ * build metadata and logs. Static output is exported back to the host.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
   getDeploymentContext,
   claimDeploymentForBuilding,
-} from "../services/deployment.service.js";
+} from "../services/deployment/deployment.service.js";
 
-import { detectBuildConfiguration } from "../services/build.service.js";
-import { runDockerBuild } from "../services/docker.service.js";
+import { detectBuildConfiguration } from "../services/build/build-config.service.js";
+import { exportBuildOutput, runDockerBuild } from "../services/build/build-sandbox.service.js";
 import { loadBuildEnvironment } from "../services/environment.service.js";
 
-import { writeDeploymentLog } from "../services/deployment-log.service.js";
+import { writeDeploymentLog } from "../services/deployment/deployment-log.service.js";
 
 import {
   saveBuildMetadata,
   saveBuildFailure,
-} from "../services/deployment-metadata.service.js";
+} from "../services/deployment/deployment-metadata.service.js";
+
+import type { ProcessBuildResult } from "../types/build.types.js";
 import { NonRetryableError } from "../utils/errors.js";
 
-export interface ProcessBuildResult {
-  deploymentId: string;
-  framework: string;
-  outputPath: string;
-  buildLogs: string;
-  durationMs: number;
+/** Folders that speed up rebuilds when kept between deployments of a project. */
+function buildCachePaths(framework: string): string[] {
+  return /next/i.test(framework) ? [".next/cache"] : [];
 }
 
 async function persistBuildOutput(
@@ -45,7 +47,11 @@ async function persistBuildOutput(
     });
   }
 
-  for (let index = 0; index < truncatedOutput.length; index += chunkSize) {
+  for (
+    let index = 0;
+    index < truncatedOutput.length;
+    index += chunkSize
+  ) {
     const chunk = truncatedOutput.slice(index, index + chunkSize);
 
     await writeDeploymentLog({
@@ -82,10 +88,10 @@ export async function processDeploymentBuild(
 
   await assertLease();
 
-const claimed = await claimDeploymentForBuilding(
-  deploymentId,
-  workerId,
-);
+  const claimed = await claimDeploymentForBuilding(
+    deploymentId,
+    workerId,
+  );
 
   if (!claimed) {
     console.log(
@@ -114,33 +120,40 @@ const claimed = await claimDeploymentForBuilding(
       buildCommand: configuration.buildCommand,
       packageManager: configuration.packageManager,
       outputDir: configuration.outputDir,
+      deploymentType: configuration.deploymentType,
+      startCommand: configuration.startCommand,
     });
 
     await writeDeploymentLog({
       deploymentId,
       stage: "BUILD",
-      message: `Detected framework: ${configuration.framework}. Package manager: ${configuration.packageManager}.`,
+      message:
+        `Detected framework: ${configuration.framework}. ` +
+        `Deployment type: ${configuration.deploymentType}. ` +
+        `Package manager: ${configuration.packageManager}.`,
     });
 
     await writeDeploymentLog({
       deploymentId,
       stage: "INSTALL",
-      message: `Dependency installation started using ${configuration.packageManager}.`,
+      message:
+        `Dependency installation started using ${configuration.packageManager}.`,
     });
 
     console.log(
       `Building ${configuration.framework} project using ${configuration.packageManager}`,
     );
 
-    const { variables: environment, skipped } = await loadBuildEnvironment(
-      context.project,
-    );
+    const { variables: environment, skipped } =
+      await loadBuildEnvironment(context.project);
 
     if (environment.length > 0) {
       await writeDeploymentLog({
         deploymentId,
         stage: "BUILD",
-        message: `Loaded ${environment.length} environment variable(s) for the build step: ${environment.map((v) => v.key).join(", ")}`,
+        message:
+          `Loaded ${environment.length} environment variable(s) ` +
+          `for the build step: ${environment.map((v) => v.key).join(", ")}`,
       });
     }
 
@@ -149,39 +162,112 @@ const claimed = await claimDeploymentForBuilding(
         deploymentId,
         stage: "BUILD",
         level: "WARN",
-        message: `Ignored reserved or invalid environment variable name(s): ${skipped.join(", ")}`,
+        message:
+          `Ignored reserved or invalid environment variable name(s): ${skipped.join(", ")}`,
       });
     }
 
     await assertLease();
+
     const buildResult = await runDockerBuild({
       deploymentId,
+      workerId,
+      projectId: context.project._id.toHexString(),
       sourceDir,
+      cachePaths: buildCachePaths(configuration.framework),
       rootDir: configuration.rootDir,
       installCommand: configuration.installCommand,
       buildCommand: configuration.buildCommand,
       environment,
       signal,
     });
+
     await assertLease();
 
-    // Each container's output is stored under its own stage (INSTALL, then BUILD).
     for (const phase of buildResult.phases) {
-      await persistBuildOutput(deploymentId, phase.output, phase.stage);
+      await persistBuildOutput(
+        deploymentId,
+        phase.output,
+        phase.stage,
+      );
     }
 
-    const projectRoot = path.resolve(sourceDir, configuration.rootDir);
-    const outputPath = path.resolve(projectRoot, configuration.outputDir);
+    const projectRoot = path.resolve(
+      sourceDir,
+      configuration.rootDir,
+    );
 
-    const relativeOutput = path.relative(projectRoot, outputPath);
+    if (configuration.deploymentType === "RUNTIME") {
+      if (!configuration.startCommand) {
+        throw new NonRetryableError(
+          "Runtime application is missing a start command.",
+        );
+      }
+
+      await saveBuildMetadata(deploymentId, {
+        framework: configuration.framework,
+        buildCommand: configuration.buildCommand,
+        packageManager: configuration.packageManager,
+        outputDir: configuration.outputDir,
+        deploymentType: configuration.deploymentType,
+        startCommand: configuration.startCommand,
+        buildDurationMs: buildResult.durationMs,
+      });
+
+      await writeDeploymentLog({
+        deploymentId,
+        stage: "BUILD",
+        message:
+          `Runtime build completed successfully in ${buildResult.durationMs} ms. ` +
+          `Start command: ${configuration.startCommand}.`,
+      });
+
+      console.log(
+        `Runtime build completed for deployment ${deploymentId}`,
+      );
+
+      return {
+        deploymentId,
+        framework: configuration.framework,
+        deploymentType: "RUNTIME",
+        sourcePath: projectRoot,
+        rootDir: configuration.rootDir,
+        projectPath: buildResult.projectPath,
+        startCommand: configuration.startCommand,
+        buildLogs: buildResult.output,
+        durationMs: buildResult.durationMs,
+      };
+    }
+
+    const outputPath = path.resolve(
+      projectRoot,
+      configuration.outputDir,
+    );
+
+    const relativeOutput = path.relative(
+      projectRoot,
+      outputPath,
+    );
 
     if (
       relativeOutput === ".." ||
       relativeOutput.startsWith(`..${path.sep}`) ||
       path.isAbsolute(relativeOutput)
     ) {
-      throw new NonRetryableError("Build output directory is outside the project root.");
+      throw new NonRetryableError(
+        "Build output directory is outside the project root.",
+      );
     }
+
+    // The build ran inside a Docker volume; copy only the output back to the host.
+    await exportBuildOutput({
+      deploymentId,
+      workerId,
+      projectPath: buildResult.projectPath,
+      outputDir: configuration.outputDir,
+      hostDestination: outputPath,
+      signal,
+    });
 
     const outputStats = await fs.stat(outputPath).catch(() => null);
 
@@ -190,6 +276,7 @@ const claimed = await claimDeploymentForBuilding(
         `Build completed but output directory was not found: ${configuration.outputDir}`,
       );
     }
+
     await assertLease();
 
     await saveBuildMetadata(deploymentId, {
@@ -197,13 +284,17 @@ const claimed = await claimDeploymentForBuilding(
       buildCommand: configuration.buildCommand,
       packageManager: configuration.packageManager,
       outputDir: configuration.outputDir,
+      deploymentType: configuration.deploymentType,
+      startCommand: configuration.startCommand,
       buildDurationMs: buildResult.durationMs,
     });
 
     await writeDeploymentLog({
       deploymentId,
       stage: "BUILD",
-      message: `Build completed successfully in ${buildResult.durationMs} ms. Output directory: ${configuration.outputDir}.`,
+      message:
+        `Build completed successfully in ${buildResult.durationMs} ms. ` +
+        `Output directory: ${configuration.outputDir}.`,
     });
 
     console.log(`Build completed for deployment ${deploymentId}`);
@@ -211,13 +302,16 @@ const claimed = await claimDeploymentForBuilding(
     return {
       deploymentId,
       framework: configuration.framework,
+      deploymentType: "STATIC",
       outputPath,
       buildLogs: buildResult.output,
       durationMs: buildResult.durationMs,
     };
-    } catch (error) {
+  } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Unknown build error";
+      error instanceof Error
+        ? error.message
+        : "Unknown build error";
 
     try {
       await assertLease();

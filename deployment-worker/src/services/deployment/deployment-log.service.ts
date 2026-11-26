@@ -1,6 +1,9 @@
-
+/**
+ * Writes deployment log lines (shown in the dashboard) to MongoDB.
+ */
 import { ObjectId } from "mongodb";
-import { getDatabase } from "../lib/mongodb.js";
+import { COLLECTIONS } from "../../constants/collections.js";
+import { getDatabase } from "../../lib/mongodb.js";
 
 export type DeploymentLogLevel = "INFO" | "WARN" | "ERROR";
 
@@ -12,7 +15,6 @@ export type DeploymentLogStage =
   | "HEALTH_CHECK"
   | "SYSTEM";
 
-const DEPLOYMENT_LOGS_COLLECTION = "DeploymentLog";
 const MAX_MESSAGE_LENGTH = 10_000;
 
 interface WriteDeploymentLogOptions {
@@ -20,6 +22,22 @@ interface WriteDeploymentLogOptions {
   stage: DeploymentLogStage;
   message: string;
   level?: DeploymentLogLevel;
+}
+
+/**
+ * Same as writeDeploymentLog, but never throws: a log write must not fail a deployment.
+ */
+export async function writeDeploymentLogSafely(
+  deploymentId: string,
+  message: string,
+  level: DeploymentLogLevel = "INFO",
+  stage: DeploymentLogStage = "DEPLOY",
+): Promise<void> {
+  try {
+    await writeDeploymentLog({ deploymentId, stage, message, level });
+  } catch (error) {
+    console.error("Could not persist deployment log:", error);
+  }
 }
 
 export async function writeDeploymentLog({
@@ -40,7 +58,7 @@ export async function writeDeploymentLog({
 
   const database = getDatabase();
 
-  await database.collection(DEPLOYMENT_LOGS_COLLECTION).insertOne({
+  await database.collection(COLLECTIONS.deploymentLogs).insertOne({
     deploymentId: new ObjectId(deploymentId),
     stage,
     level,

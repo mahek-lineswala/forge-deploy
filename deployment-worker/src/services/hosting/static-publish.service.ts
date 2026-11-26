@@ -1,3 +1,6 @@
+/**
+ * Atomic publish of static build output into DEPLOYMENTS_DIR.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 

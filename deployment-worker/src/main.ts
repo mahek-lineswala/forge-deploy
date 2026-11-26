@@ -1,4 +1,7 @@
-
+/**
+ * Process entry point: connects MongoDB and Redis, starts the BullMQ worker and the
+ * janitor, and shuts everything down cleanly on SIGINT/SIGTERM.
+ */
 import {
   connectMongoDB,
   disconnectMongoDB,

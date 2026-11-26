@@ -82,11 +82,19 @@ model Deployment {
   leaseExpiresAt DateTime?
   attempts       Int      @default(0)
 
+  // Build metadata (written by the worker)
   framework       String?
   buildCommand    String?
   packageManager  String?
   outputDir       String?
   buildDurationMs Int?
+
+  // Runtime deployments (deploymentType = "STATIC" | "RUNTIME")
+  deploymentType     String?
+  startCommand       String?
+  runtimeContainerId String?
+  runtimePort        Int?
+
   errorMessage    String?
   startedAt       DateTime?
   finishedAt      DateTime?

@@ -1,11 +1,16 @@
-
+/**
+ * BullMQ consumer for the "deployments" queue. Per job it claims the MongoDB lease,
+ * keeps it renewed, watches for cancellation, runs the pipeline and decides whether
+ * a failure is retried.
+ */
 import { UnrecoverableError, Worker, type Job } from "bullmq";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { redis } from "./lib/redis.js";
 import { env } from "./config/env.js";
+import { TERMINAL_DEPLOYMENT_STATUSES } from "./constants/deployment-status.js";
+import { redis } from "./lib/redis.js";
 
 import { processDeployment } from "./processors/deployment.processor.js";
 
@@ -15,10 +20,11 @@ import {
   releaseDeploymentLease,
   markDeploymentFailed,
   getDeploymentStatus,
-} from "./services/deployment.service.js";
+} from "./services/deployment/deployment.service.js";
 
 import type { DeploymentJobData } from "./types/deployment.types.js";
 import { isNonRetryableError } from "./utils/errors.js";
+import { isDeploymentId } from "./utils/deployment-id.js";
 
 export const DEPLOYMENT_QUEUE_NAME = "deployments";
 
@@ -26,13 +32,6 @@ const LEASE_RENEWAL_INTERVAL_MS = 30_000;
 
 // How quickly a user cancel stops a running clone/build.
 const CANCEL_POLL_INTERVAL_MS = 5_000;
-
-const TERMINAL_STATUSES = new Set([
-  "READY",
-  "FAILED",
-  "CANCELLED",
-  "SUPERSEDED",
-]);
 
 export const deploymentWorker = new Worker<DeploymentJobData>(
   DEPLOYMENT_QUEUE_NAME,
@@ -57,7 +56,7 @@ export const deploymentWorker = new Worker<DeploymentJobData>(
     if (!claimed) {
       const status = await getDeploymentStatus(deploymentId);
 
-      if (status && TERMINAL_STATUSES.has(status)) {
+      if (status && TERMINAL_DEPLOYMENT_STATUSES.has(status)) {
         console.log(
           `[Worker] Deployment ${deploymentId} is already ${status}. Skipping.`,
         );
@@ -149,7 +148,7 @@ export const deploymentWorker = new Worker<DeploymentJobData>(
     } catch (error) {
       const status = await getDeploymentStatus(deploymentId).catch(() => null);
 
-      if (status === "CANCELLED" && /^[a-f0-9]{24}$/.test(deploymentId)) {
+      if (status === "CANCELLED" && isDeploymentId(deploymentId)) {
         // Cancelled is terminal: nobody will publish this deployment again,
         // so remove anything it already published and stop retrying.
         await fs
@@ -204,7 +203,7 @@ export const deploymentWorker = new Worker<DeploymentJobData>(
       }
     }
   },
-    {
+  {
     connection: redis,
     concurrency: env.MAX_CONCURRENT_DEPLOYMENTS,
     autorun: false,

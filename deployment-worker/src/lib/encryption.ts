@@ -1,3 +1,6 @@
+/**
+ * AES-256-GCM decryption compatible with the backend's encrypt().
+ */
 import { createDecipheriv } from "node:crypto";
 
 import { env } from "../config/env.js";

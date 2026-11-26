@@ -1,10 +1,8 @@
-import { env } from "../config/env.js";
-
-function assertDeploymentId(deploymentId: string): void {
-  if (!/^[a-f0-9]{24}$/.test(deploymentId)) {
-    throw new Error("Invalid deployment ID.");
-  }
-}
+/**
+ * Deployment hostnames and public URLs.
+ */
+import { env } from "../../config/env.js";
+import { assertDeploymentId } from "../../utils/deployment-id.js";
 
 /**
  * Host name a deployment is served on: <deploymentId>.<base host>.

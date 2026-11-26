@@ -1,15 +1,22 @@
-
+/**
+ * Detects framework, deployment type (STATIC/RUNTIME), package manager and the
+ * install/build/start commands from package.json and project settings.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { ProjectDocument } from "../types/deployment.types.js";
-import { NonRetryableError } from "../utils/errors.js";
+import type { ProjectDocument } from "../../types/deployment.types.js";
+import { NonRetryableError } from "../../utils/errors.js";
+
+export type DeploymentType = "STATIC" | "RUNTIME";
 
 export interface BuildConfiguration {
   framework: string;
+  deploymentType: DeploymentType;
   packageManager: "npm" | "yarn" | "pnpm";
   installCommand: string;
   buildCommand: string;
+  startCommand: string | null;
   outputDir: string;
   rootDir: string;
 }
@@ -41,6 +48,7 @@ function detectPackageManager(
 
 function detectFramework(pkg: PackageJson): {
   name: string;
+  deploymentType: DeploymentType;
   outputDir: string;
 } {
   const dependencies = {
@@ -49,42 +57,82 @@ function detectFramework(pkg: PackageJson): {
   };
 
   if (dependencies["next"]) {
-    return { name: "Next.js", outputDir: ".next" };
+    return {
+      name: "Next.js",
+      deploymentType: "RUNTIME",
+      outputDir: ".next",
+    };
   }
 
   if (dependencies["vite"]) {
-    return { name: "Vite", outputDir: "dist" };
+    return {
+      name: "Vite",
+      deploymentType: "STATIC",
+      outputDir: "dist",
+    };
   }
 
   if (dependencies["react-scripts"]) {
-    return { name: "Create React App", outputDir: "build" };
+    return {
+      name: "Create React App",
+      deploymentType: "STATIC",
+      outputDir: "build",
+    };
   }
 
   if (dependencies["@angular/core"]) {
-    return { name: "Angular", outputDir: "dist" };
+    return {
+      name: "Angular",
+      deploymentType: "STATIC",
+      outputDir: "dist",
+    };
   }
 
   if (dependencies["nuxt"]) {
-    return { name: "Nuxt", outputDir: ".output/public" };
+    return {
+      name: "Nuxt",
+      deploymentType: "RUNTIME",
+      outputDir: ".output",
+    };
   }
 
   if (dependencies["astro"]) {
-    return { name: "Astro", outputDir: "dist" };
+    return {
+      name: "Astro",
+      deploymentType: "STATIC",
+      outputDir: "dist",
+    };
   }
 
   if (dependencies["@sveltejs/kit"]) {
-    return { name: "SvelteKit", outputDir: "build" };
+    return {
+      name: "SvelteKit",
+      deploymentType: "RUNTIME",
+      outputDir: "build",
+    };
   }
 
   if (dependencies["vue"]) {
-    return { name: "Vue", outputDir: "dist" };
+    return {
+      name: "Vue",
+      deploymentType: "STATIC",
+      outputDir: "dist",
+    };
   }
 
   if (dependencies["express"] || dependencies["fastify"]) {
-    return { name: "Node.js", outputDir: "dist" };
+    return {
+      name: "Node.js",
+      deploymentType: "RUNTIME",
+      outputDir: "dist",
+    };
   }
 
-  return { name: "Unknown", outputDir: "dist" };
+  return {
+    name: "Unknown",
+    deploymentType: "STATIC",
+    outputDir: "dist",
+  };
 }
 
 export async function detectBuildConfiguration(
@@ -92,9 +140,7 @@ export async function detectBuildConfiguration(
   project: ProjectDocument,
 ): Promise<BuildConfiguration> {
   const rootDir = project.rootDir || ".";
-
   const projectRoot = path.resolve(sourceDir, rootDir);
-
   const relative = path.relative(path.resolve(sourceDir), projectRoot);
 
   if (
@@ -102,19 +148,20 @@ export async function detectBuildConfiguration(
     relative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relative)
   ) {
-    throw new NonRetryableError("Project root directory is outside the repository.");
+    throw new NonRetryableError(
+      "Project root directory is outside the repository.",
+    );
   }
 
   const packageJsonPath = path.join(projectRoot, "package.json");
 
   if (!(await fileExists(packageJsonPath))) {
-    throw new NonRetryableError("package.json was not found in the project root.");
+    throw new NonRetryableError(
+      "package.json was not found in the project root.",
+    );
   }
 
-  const packageJsonContent = await fs.readFile(
-    packageJsonPath,
-    "utf8",
-  );
+  const packageJsonContent = await fs.readFile(packageJsonPath, "utf8");
 
   let pkg: PackageJson;
 
@@ -125,15 +172,26 @@ export async function detectBuildConfiguration(
   }
 
   const files = await fs.readdir(projectRoot);
-
   const packageManager = detectPackageManager(files);
-
   const framework = detectFramework(pkg);
 
-  const buildScript = pkg.scripts?.build;
+  const buildCommand =
+  project.buildCommand ||
+  (pkg.scripts?.build ? `${packageManager} run build` : "true");
 
-  if (!buildScript) {
-    throw new NonRetryableError("No build script found in package.json.");
+  const startCommand =
+    project.startCommand || pkg.scripts?.start || null;
+
+  if (framework.deploymentType === "RUNTIME" && !startCommand) {
+    throw new NonRetryableError(
+      "Runtime application requires a start command. Configure one in project settings or package.json.",
+    );
+  }
+
+  if (framework.deploymentType === "STATIC" && !pkg.scripts?.build) {
+    throw new NonRetryableError(
+      "No build script found in package.json.",
+    );
   }
 
   let installCommand: string;
@@ -159,9 +217,11 @@ export async function detectBuildConfiguration(
 
   return {
     framework: project.framework || framework.name,
+    deploymentType: framework.deploymentType,
     packageManager,
     installCommand,
-    buildCommand: project.buildCommand || `${packageManager} run build`,
+    buildCommand,
+    startCommand,
     outputDir: project.outputDir || framework.outputDir,
     rootDir,
   };

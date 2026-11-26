@@ -1,3 +1,7 @@
+/**
+ * Loads and decrypts project environment variables; shell-exports and log redaction.
+ */
+import { COLLECTIONS } from "../constants/collections.js";
 import { getDatabase } from "../lib/mongodb.js";
 import { decryptSecret } from "../lib/encryption.js";
 import type { ProjectDocument } from "../types/deployment.types.js";
@@ -30,7 +34,7 @@ export async function loadBuildEnvironment(
   project: ProjectDocument,
 ): Promise<{ variables: BuildEnvironmentVariable[]; skipped: string[] }> {
   const documents = await getDatabase()
-    .collection<EnvironmentVariableDocument>("EnvironmentVariable")
+    .collection<EnvironmentVariableDocument>(COLLECTIONS.environmentVariables)
     .find({ projectId: project._id })
     .project<EnvironmentVariableDocument>({ key: 1, encryptedValue: 1 })
     .sort({ key: 1 })
