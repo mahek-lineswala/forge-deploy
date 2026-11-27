@@ -29,9 +29,10 @@ const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
     <div className="mx-auto max-w-xl px-6 py-24">
       <EmptyState
         title="Page not found"
+        description="The page you opened doesn't exist, or it was moved."
         action={
           <Link to="/">
-            <Button>Back to projects</Button>
+            <Button>Go to projects</Button>
           </Link>
         }
       />

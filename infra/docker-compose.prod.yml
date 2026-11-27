@@ -129,6 +129,25 @@ services:
       - internal
     logging: *logging
 
+  # One-off: builds frontend/ and publishes it to the dashboard folder.
+  #   docker compose -f <this file> --env-file infra/.env --profile tools run --rm dashboard-build
+  dashboard-build:
+    image: node:22-alpine
+    profiles: ["tools"]
+    working_dir: /build
+    volumes:
+      - ../frontend:/src:ro
+      - ${FORGEDEPLOY_DATA_DIR:?set FORGEDEPLOY_DATA_DIR in infra/.env}/dashboard:/out
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        tar -C /src --exclude=node_modules --exclude=dist -cf - . | tar -C /build -xf -
+        npm ci
+        npm run build
+        rm -rf /out/* /out/.[!.]*
+        cp -r dist/. /out/
+
 volumes:
   redis-data:
   letsencrypt:

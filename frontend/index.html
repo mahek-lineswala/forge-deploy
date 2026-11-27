@@ -1,12 +1,25 @@
 <!doctype html>
-<html lang="en" class="h-full">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#090b0f" />
     <title>ForgeDeploy</title>
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23151a22'/%3E%3Crect x='7' y='16' width='4.5' height='9' rx='2.25' fill='%23c2483d'/%3E%3Crect x='13.75' y='11' width='4.5' height='14' rx='2.25' fill='%23f26a2a'/%3E%3Crect x='20.5' y='6' width='4.5' height='19' rx='2.25' fill='%23ffd36b'/%3E%3C/svg%3E"
+    />
+    <script>
+      // Apply the saved theme before first paint to avoid a flash.
+      try {
+        var t = localStorage.getItem("forgedeploy-theme");
+        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
   </head>
-  <body class="h-full">
-    <div id="root" class="h-full"></div>
+  <body>
+    <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

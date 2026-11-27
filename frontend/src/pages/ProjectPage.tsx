@@ -2,16 +2,31 @@ import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
 import {
+  Badge,
+  BoltIcon,
+  BranchIcon,
   Button,
   Card,
+  ConfirmDialog,
+  Crumbs,
   EmptyState,
   ErrorBox,
+  ExternalIcon,
   Field,
+  GitHubIcon,
+  GlobeIcon,
+  HeatBar,
   Input,
+  KeyIcon,
+  LayersIcon,
   Loading,
   PageHeader,
+  ProjectMark,
   Select,
+  SlidersIcon,
   StatusBadge,
+  Textarea,
+  TrashIcon,
   cx,
 } from "../components/ui";
 import { formatDuration, shortSha, timeAgo } from "../lib/format";
@@ -25,15 +40,17 @@ import {
   useSaveEnvVar,
   useUpdateProject,
 } from "../lib/queries";
-import type { Project, ProjectFramework } from "../lib/types";
+import type { Deployment, Project, ProjectFramework } from "../lib/types";
 
 export type ProjectTab = "deployments" | "environment" | "settings";
 
-const TABS: { id: ProjectTab; label: string }[] = [
-  { id: "deployments", label: "Deployments" },
-  { id: "environment", label: "Environment" },
-  { id: "settings", label: "Settings" },
+const TABS: { id: ProjectTab; label: string; icon: typeof LayersIcon }[] = [
+  { id: "deployments", label: "Deployments", icon: LayersIcon },
+  { id: "environment", label: "Environment", icon: KeyIcon },
+  { id: "settings", label: "Settings", icon: SlidersIcon },
 ];
+
+const stripScheme = (url: string) => url.replace(/^https?:\/\//, "");
 
 export function ProjectPage({ projectId, tab = "deployments" }: { projectId: string; tab?: ProjectTab }) {
   const project = useProject(projectId);
@@ -53,34 +70,40 @@ export function ProjectPage({ projectId, tab = "deployments" }: { projectId: str
 
   return (
     <>
+      <Crumbs items={[<Link to="/">Projects</Link>, project.data.name]} />
+
       <PageHeader
+        leading={<ProjectMark name={project.data.name} className="size-14 rounded-2xl" />}
         title={project.data.name}
         description={
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <a
               href={`https://github.com/${project.data.repository}`}
               target="_blank"
               rel="noreferrer"
-              className="font-mono hover:text-zinc-200"
+              className="inline-flex items-center gap-1.5 font-mono text-[13px] hover:text-fg"
             >
-              {project.data.repository}
+              <GitHubIcon className="size-3.5" /> {project.data.repository}
             </a>
-            <span>·</span>
-            <span>{project.data.branch}</span>
-            {live?.deploymentUrl && (
-              <>
-                <span>·</span>
-                <a href={live.deploymentUrl} target="_blank" rel="noreferrer" className="text-emerald-300 hover:underline">
-                  {live.deploymentUrl.replace(/^https?:\/\//, "")}
-                </a>
-              </>
-            )}
+            <span className="inline-flex items-center gap-1.5">
+              <BranchIcon className="size-3.5" /> {project.data.branch}
+            </span>
+            {project.data.framework && <Badge>{project.data.framework}</Badge>}
           </div>
         }
         actions={
-          <Button loading={createDeployment.isPending} onClick={() => void deploy().catch(() => undefined)}>
-            Deploy
-          </Button>
+          <>
+            {live?.deploymentUrl && (
+              <a href={live.deploymentUrl} target="_blank" rel="noreferrer">
+                <Button variant="secondary">
+                  Visit <ExternalIcon />
+                </Button>
+              </a>
+            )}
+            <Button loading={createDeployment.isPending} onClick={() => void deploy().catch(() => undefined)}>
+              <BoltIcon /> Deploy
+            </Button>
+          </>
         }
       />
 
@@ -88,26 +111,31 @@ export function ProjectPage({ projectId, tab = "deployments" }: { projectId: str
         <ErrorBox error={createDeployment.error} />
       </div>
 
-      <div className="mb-6 flex gap-1 border-b border-zinc-800">
-        {TABS.map((item) => (
-          <Link
-            key={item.id}
-            to="/projects/$projectId"
-            params={{ projectId }}
-            search={{ tab: item.id === "deployments" ? undefined : item.id }}
-            className={cx(
-              "-mb-px border-b-2 px-3 py-2 text-sm",
-              tab === item.id
-                ? "border-white text-zinc-100"
-                : "border-transparent text-zinc-400 hover:text-zinc-200",
-            )}
-          >
-            {item.label}
-          </Link>
-        ))}
+      <ProductionCard deployments={deployments.data} loading={deployments.isPending} onDeploy={() => void deploy().catch(() => undefined)} deploying={createDeployment.isPending} />
+
+      <div role="tablist" aria-label="Project sections" className="mt-10 mb-6 flex gap-1 border-b border-line">
+        {TABS.map((item) => {
+          const active = tab === item.id;
+          return (
+            <Link
+              key={item.id}
+              role="tab"
+              aria-selected={active}
+              to="/projects/$projectId"
+              params={{ projectId }}
+              search={{ tab: item.id === "deployments" ? undefined : item.id }}
+              className={cx(
+                "-mb-px flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors",
+                active ? "border-fg text-fg" : "border-transparent text-muted hover:text-fg",
+              )}
+            >
+              <item.icon /> {item.label}
+            </Link>
+          );
+        })}
       </div>
 
-      {tab === "deployments" && <DeploymentsTab projectId={projectId} />}
+      {tab === "deployments" && <DeploymentsTab projectId={projectId} liveId={live?.id} />}
       {tab === "environment" && <EnvironmentTab projectId={projectId} />}
       {tab === "settings" && <SettingsTab project={project.data} />}
     </>
@@ -115,10 +143,102 @@ export function ProjectPage({ projectId, tab = "deployments" }: { projectId: str
 }
 
 // ============================================
+// PRODUCTION CARD
+// ============================================
+
+function ProductionCard({
+  deployments,
+  loading,
+  onDeploy,
+  deploying,
+}: {
+  deployments: Deployment[] | undefined;
+  loading: boolean;
+  onDeploy: () => void;
+  deploying: boolean;
+}) {
+  if (loading) return null;
+
+  if (!deployments || deployments.length === 0) {
+    return (
+      <EmptyState
+        icon={<BoltIcon />}
+        title="Nothing deployed yet"
+        description="Deploy builds the latest commit on your branch and gives it a URL."
+        action={
+          <Button loading={deploying} onClick={onDeploy}>
+            <BoltIcon /> Deploy now
+          </Button>
+        }
+      />
+    );
+  }
+
+  const live = deployments.find((d) => d.status === "READY");
+  const latest = deployments[0]!;
+  const showLatest = latest.id !== live?.id;
+
+  return (
+    <div className="space-y-3">
+      {live && (
+        <Card className="p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-sm text-muted">Production</p>
+              <a
+                href={live.deploymentUrl ?? "#"}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-1 flex items-center gap-2 text-xl font-semibold tracking-[-0.01em] hover:underline"
+              >
+                <GlobeIcon className="size-5 text-cool" />
+                <span className="truncate">{live.deploymentUrl ? stripScheme(live.deploymentUrl) : "—"}</span>
+              </a>
+            </div>
+            <StatusBadge status={live.status} />
+          </div>
+
+          <HeatBar status={live.status} className="mt-6" />
+
+          <Link
+            to="/deployments/$deploymentId"
+            params={{ deploymentId: live.id }}
+            className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted hover:text-fg"
+          >
+            <span className="font-mono">{shortSha(live.commitSha)}</span>
+            <span className="min-w-0 flex-1 truncate">{live.commitMessage ?? "Manual deployment"}</span>
+            <span>
+              {timeAgo(live.createdAt)}
+              {live.buildDurationMs != null && ` · built in ${formatDuration(live.buildDurationMs)}`}
+            </span>
+          </Link>
+        </Card>
+      )}
+
+      {showLatest && (
+        <Link to="/deployments/$deploymentId" params={{ deploymentId: latest.id }} className="group block rounded-xl">
+          <Card className="space-y-3 p-4 transition-colors group-hover:border-line-strong">
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <span className="text-muted">{live ? "Latest deployment" : "Deployment"}</span>
+              <StatusBadge status={latest.status} />
+            </div>
+            <HeatBar status={latest.status} />
+            <p className="truncate text-sm text-muted">
+              <span className="font-mono">{shortSha(latest.commitSha)}</span>{" "}
+              {latest.commitMessage ?? "Manual deployment"}
+            </p>
+          </Card>
+        </Link>
+      )}
+    </div>
+  );
+}
+
+// ============================================
 // DEPLOYMENTS
 // ============================================
 
-function DeploymentsTab({ projectId }: { projectId: string }) {
+function DeploymentsTab({ projectId, liveId }: { projectId: string; liveId: string | undefined }) {
   const deployments = useDeployments(projectId);
 
   if (deployments.isPending) return <Loading />;
@@ -129,27 +249,36 @@ function DeploymentsTab({ projectId }: { projectId: string }) {
   }
 
   return (
-    <Card>
-      <ul className="divide-y divide-zinc-800">
+    <Card className="overflow-hidden">
+      <ul className="divide-y divide-line">
         {deployments.data.map((deployment) => (
           <li key={deployment.id}>
             <Link
               to="/deployments/$deploymentId"
               params={{ deploymentId: deployment.id }}
-              className="grid grid-cols-[8rem_1fr_auto] items-center gap-4 px-4 py-3 hover:bg-zinc-900"
+              className="grid grid-cols-1 items-center gap-x-5 gap-y-2 px-5 py-4 transition-colors hover:bg-raised sm:grid-cols-[7.5rem_minmax(0,1fr)_7rem_auto]"
             >
-              <StatusBadge status={deployment.status} />
+              <span className="flex">
+                <StatusBadge status={deployment.status} />
+              </span>
+
               <div className="min-w-0">
-                <p className="truncate text-sm">
-                  {deployment.commitMessage ?? <span className="text-zinc-400">Manual deployment</span>}
+                <p className="flex items-center gap-2 truncate text-sm font-medium">
+                  <span className="truncate">
+                    {deployment.commitMessage ?? <span className="text-muted">Manual deployment</span>}
+                  </span>
+                  {deployment.id === liveId && <Badge className="border-cool/40 text-cool">Production</Badge>}
                 </p>
-                <p className="font-mono text-xs text-zinc-500">
+                <p className="mt-0.5 truncate font-mono text-xs text-muted">
                   {shortSha(deployment.commitSha)} · {deployment.id}
                 </p>
               </div>
-              <div className="text-right text-xs text-zinc-500">
+
+              <HeatBar status={deployment.status} className="hidden sm:flex" />
+
+              <div className="text-xs text-muted sm:text-right">
                 <p>{timeAgo(deployment.createdAt)}</p>
-                {deployment.buildDurationMs != null && <p>build {formatDuration(deployment.buildDurationMs)}</p>}
+                {deployment.buildDurationMs != null && <p>{formatDuration(deployment.buildDurationMs)}</p>}
               </div>
             </Link>
           </li>
@@ -171,31 +300,41 @@ function EnvironmentTab({ projectId }: { projectId: string }) {
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
+  const [toDelete, setToDelete] = useState<string | null>(null);
 
   const existing = new Set(variables.data?.map((v) => v.key));
+
+  const reset = () => {
+    setKey("");
+    setValue("");
+    setEditing(null);
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmedKey = key.trim();
 
     await save.mutateAsync({ key: trimmedKey, value, exists: existing.has(trimmedKey) });
-    setKey("");
-    setValue("");
-    setEditing(null);
+    reset();
   };
 
   return (
     <div className="space-y-6">
-      <Card className="p-5">
-        <h2 className="font-medium">{editing ? `Update ${editing}` : "Add variable"}</h2>
-        <p className="mt-1 text-sm text-zinc-400">
-          Values are encrypted and only available to the build step. Vite exposes variables prefixed{" "}
-          <code className="text-zinc-300">VITE_</code> to the browser bundle. Changes apply to the next deployment.
+      <Card className="p-6">
+        <h2 className="text-base font-semibold">{editing ? `Update ${editing}` : "Add a variable"}</h2>
+        <p className="mt-1 max-w-2xl text-sm text-muted">
+          Values are encrypted and only available while the project builds. Vite exposes variables prefixed with{" "}
+          <code className="rounded bg-raised px-1 font-mono text-[13px] text-fg">VITE_</code> to the browser bundle.
+          Changes apply to the next deployment.
         </p>
 
-        <form onSubmit={(e) => void submit(e).catch(() => undefined)} className="mt-4 grid gap-3 sm:grid-cols-[1fr_2fr_auto] sm:items-start">
+        <form
+          onSubmit={(e) => void submit(e).catch(() => undefined)}
+          className="mt-5 grid gap-3 sm:grid-cols-[1fr_2fr_auto] sm:items-start"
+        >
           <Input
             placeholder="KEY"
+            aria-label="Variable name"
             required
             pattern="[A-Za-z_][A-Za-z0-9_]*"
             title="Letters, numbers and underscores; cannot start with a number"
@@ -204,11 +343,12 @@ function EnvironmentTab({ projectId }: { projectId: string }) {
             readOnly={editing !== null}
             onChange={(e) => setKey(e.target.value)}
           />
-          <textarea
+          <Textarea
             placeholder="value"
+            aria-label="Variable value"
             rows={1}
             maxLength={10000}
-            className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 font-mono text-sm placeholder:text-zinc-500 focus:border-zinc-500 focus:outline-none"
+            className="font-mono"
             value={value}
             onChange={(e) => setValue(e.target.value)}
           />
@@ -217,15 +357,7 @@ function EnvironmentTab({ projectId }: { projectId: string }) {
               {editing || existing.has(key.trim()) ? "Update" : "Add"}
             </Button>
             {editing && (
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setEditing(null);
-                  setKey("");
-                  setValue("");
-                }}
-              >
+              <Button variant="ghost" onClick={reset}>
                 Cancel
               </Button>
             )}
@@ -237,24 +369,27 @@ function EnvironmentTab({ projectId }: { projectId: string }) {
       </Card>
 
       {variables.isPending && <Loading />}
-      <ErrorBox error={variables.error ?? remove.error} />
+      <ErrorBox error={variables.error} />
 
       {variables.data?.length === 0 && (
-        <EmptyState title="No environment variables" description="Add one above, e.g. VITE_API_URL." />
+        <EmptyState icon={<KeyIcon />} title="No environment variables" description="Add one above, for example VITE_API_URL." />
       )}
 
       {variables.data && variables.data.length > 0 && (
-        <Card>
-          <ul className="divide-y divide-zinc-800">
+        <Card className="overflow-hidden">
+          <ul className="divide-y divide-line">
             {variables.data.map((variable) => (
-              <li key={variable.id} className="flex items-center justify-between gap-4 px-4 py-3">
+              <li key={variable.id} className="flex items-center justify-between gap-4 px-5 py-3.5">
                 <div className="min-w-0">
                   <p className="truncate font-mono text-sm">{variable.key}</p>
-                  <p className="text-xs text-zinc-500">•••••••• · updated {timeAgo(variable.updatedAt)}</p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    <span className="tracking-widest">••••••••</span> · updated {timeAgo(variable.updatedAt)}
+                  </p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-1">
                   <Button
                     variant="ghost"
+                    size="sm"
                     onClick={() => {
                       setEditing(variable.key);
                       setKey(variable.key);
@@ -265,13 +400,12 @@ function EnvironmentTab({ projectId }: { projectId: string }) {
                   </Button>
                   <Button
                     variant="ghost"
-                    className="hover:text-red-300"
-                    disabled={remove.isPending}
-                    onClick={() => {
-                      if (confirm(`Delete ${variable.key}?`)) remove.mutate(variable.key);
-                    }}
+                    size="sm"
+                    aria-label={`Delete ${variable.key}`}
+                    className="hover:text-bad"
+                    onClick={() => setToDelete(variable.key)}
                   >
-                    Delete
+                    <TrashIcon />
                   </Button>
                 </div>
               </li>
@@ -279,6 +413,19 @@ function EnvironmentTab({ projectId }: { projectId: string }) {
           </ul>
         </Card>
       )}
+
+      <ConfirmDialog
+        open={toDelete !== null}
+        title={`Delete ${toDelete ?? "variable"}?`}
+        description="Future deployments will build without it. Existing deployments are not affected."
+        confirmLabel="Delete variable"
+        pending={remove.isPending}
+        error={remove.error}
+        onClose={() => setToDelete(null)}
+        onConfirm={() => {
+          if (toDelete) remove.mutate(toDelete, { onSuccess: () => setToDelete(null) });
+        }}
+      />
     </div>
   );
 }
@@ -286,6 +433,12 @@ function EnvironmentTab({ projectId }: { projectId: string }) {
 // ============================================
 // SETTINGS
 // ============================================
+
+const FRAMEWORKS: { value: ProjectFramework; label: string }[] = [
+  { value: "vite", label: "Vite / static site" },
+  { value: "nextjs", label: "Next.js" },
+  { value: "node", label: "Node.js server" },
+];
 
 function SettingsTab({ project }: { project: Project }) {
   const update = useUpdateProject(project.id);
@@ -297,8 +450,12 @@ function SettingsTab({ project }: { project: Project }) {
   const [rootDir, setRootDir] = useState(project.rootDir);
   const [framework, setFramework] = useState(project.framework ?? "");
   const [buildCommand, setBuildCommand] = useState(project.buildCommand ?? "");
+  const [startCommand, setStartCommand] = useState(project.startCommand ?? "");
   const [outputDir, setOutputDir] = useState(project.outputDir ?? "");
   const [saved, setSaved] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const isServer = framework === "nextjs" || framework === "node";
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -310,18 +467,11 @@ function SettingsTab({ project }: { project: Project }) {
       rootDir: rootDir.trim() || ".",
       framework: (framework || null) as ProjectFramework | null,
       buildCommand: buildCommand.trim() || null,
+      startCommand: isServer ? startCommand.trim() || null : null,
       outputDir: outputDir.trim() || null,
     });
 
     setSaved(true);
-  };
-
-  const deleteProject = async () => {
-    const typed = prompt(`Type "${project.name}" to delete this project.`);
-    if (typed !== project.name) return;
-
-    await remove.mutateAsync();
-    await navigate({ to: "/" });
   };
 
   return (
@@ -335,44 +485,67 @@ function SettingsTab({ project }: { project: Project }) {
             <Field label="Branch">
               <Input required value={branch} onChange={(e) => setBranch(e.target.value)} />
             </Field>
-            <Field label="Root directory">
+            <Field label="Root directory" hint="Folder containing package.json.">
               <Input value={rootDir} onChange={(e) => setRootDir(e.target.value)} />
             </Field>
           </div>
           <Field label="Framework">
             <Select value={framework} onChange={(e) => setFramework(e.target.value)}>
               <option value="">Auto-detect</option>
-              <option value="vite">Vite</option>
-              {framework && framework !== "vite" && <option value={framework}>{framework}</option>}
+              {FRAMEWORKS.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+              {framework && !FRAMEWORKS.some((item) => item.value === framework) && (
+                <option value={framework}>{framework}</option>
+              )}
             </Select>
           </Field>
           <Field label="Build command" hint="Leave empty to use the package manager's build script.">
             <Input value={buildCommand} onChange={(e) => setBuildCommand(e.target.value)} placeholder="npm run build" />
           </Field>
-          <Field label="Output directory" hint="Leave empty for the framework default.">
-            <Input value={outputDir} onChange={(e) => setOutputDir(e.target.value)} placeholder="dist" />
-          </Field>
+          {isServer ? (
+            <Field label="Start command" hint="Leave empty to use npm start.">
+              <Input value={startCommand} onChange={(e) => setStartCommand(e.target.value)} placeholder="npm start" />
+            </Field>
+          ) : (
+            <Field label="Output directory" hint="Leave empty for the framework default.">
+              <Input value={outputDir} onChange={(e) => setOutputDir(e.target.value)} placeholder="dist" />
+            </Field>
+          )}
 
           <ErrorBox error={update.error} />
           <div className="flex items-center gap-3">
             <Button type="submit" loading={update.isPending}>
-              Save
+              Save changes
             </Button>
-            {saved && <span className="text-sm text-emerald-300">Saved. Applies to the next deployment.</span>}
+            {saved && <span className="text-sm text-ok">Saved. Applies to the next deployment.</span>}
           </div>
         </form>
       </Card>
 
-      <Card className="border-red-950 p-6">
-        <h2 className="font-medium text-red-200">Delete project</h2>
-        <p className="mt-1 text-sm text-zinc-400">Removes the project and its environment variables. This cannot be undone.</p>
-        <div className="mt-4 space-y-3">
-          <ErrorBox error={remove.error} />
-          <Button variant="danger" loading={remove.isPending} onClick={() => void deleteProject().catch(() => undefined)}>
-            Delete project
-          </Button>
-        </div>
+      <Card className="border-bad/30 p-6">
+        <h2 className="text-base font-semibold text-bad">Delete project</h2>
+        <p className="mt-1 text-sm text-muted">
+          Removes the project and its environment variables. This cannot be undone.
+        </p>
+        <Button variant="danger" className="mt-4" onClick={() => setConfirmingDelete(true)}>
+          <TrashIcon /> Delete project
+        </Button>
       </Card>
+
+      <ConfirmDialog
+        open={confirmingDelete}
+        title="Delete this project?"
+        description="The project and its environment variables are removed. This cannot be undone."
+        confirmLabel="Delete project"
+        confirmText={project.name}
+        pending={remove.isPending}
+        error={remove.error}
+        onClose={() => setConfirmingDelete(false)}
+        onConfirm={() => void remove.mutateAsync().then(() => navigate({ to: "/" })).catch(() => undefined)}
+      />
     </div>
   );
 }

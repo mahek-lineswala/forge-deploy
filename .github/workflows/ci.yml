@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Nginx config (dev + prod)
+      - name: Nginx config (dev, prod, tunnel)
         run: infra/scripts/test-nginx-config.sh
       - name: Compose files
         run: |
@@ -65,6 +65,7 @@ jobs:
           printf 'DEPLOYMENT_DOMAIN=example.com\nACME_EMAIL=ci@example.com\nFORGEDEPLOY_DATA_DIR=/srv/forgedeploy\nREDIS_PASSWORD=ci\n' > infra/.env
           docker compose -f infra/docker-compose.yml config --quiet
           docker compose -f infra/docker-compose.prod.yml --env-file infra/.env config --quiet
+          docker compose -f infra/docker-compose.tunnel.yml --env-file infra/.env config --quiet
       - name: Production images build
         run: |
           docker build -t forgedeploy-backend:ci backend

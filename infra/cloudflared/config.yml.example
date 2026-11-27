@@ -1,0 +1,11 @@
+# Copy to infra/cloudflared/config.yml and replace <TUNNEL_ID> and example.com.
+# <TUNNEL_ID>.json is the credentials file `cloudflared tunnel create` wrote (see infra/README.md).
+tunnel: <TUNNEL_ID>
+credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: example.com
+    service: http://nginx:80
+  - hostname: "*.example.com"
+    service: http://nginx:80
+  - service: http_status:404

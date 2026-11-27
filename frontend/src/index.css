@@ -1,14 +1,162 @@
 @import "tailwindcss";
 
-@theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+/*
+ * ForgeDeploy design tokens.
+ * Surfaces and text switch with <html data-theme="dark|light">; the "heat" ramp
+ * (steel -> rust -> ember -> amber -> gold -> cooled mint) is the product's colour story:
+ * a build is metal heating up, and a finished deployment is cooled.
+ */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #090b0f;
+  --surface: #0f1217;
+  --raised: #151a22;
+  --sunken: #06080b;
+  --line: #1d232d;
+  --line-strong: #2b3342;
+  --fg: #e9ecf3;
+  --muted: #8d96a9;
+  --faint: #5b6577;
+  --accent: #8fb4ff;
+  --ok: #3ddba5;
+  --warn: #f6a823;
+  --bad: #ff6b6b;
+  --glow: rgb(242 106 42 / 0.16);
 }
 
-html {
-  color-scheme: dark;
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f3f5f9;
+  --surface: #ffffff;
+  --raised: #eef1f6;
+  --sunken: #0b0e13;
+  --line: #e1e5ee;
+  --line-strong: #c9d0de;
+  --fg: #111522;
+  --muted: #566074;
+  --faint: #8993a6;
+  --accent: #2c59d6;
+  --ok: #0a8f66;
+  --warn: #b86e00;
+  --bad: #d63a3a;
+  --glow: rgb(242 106 42 / 0.10);
+}
+
+:root {
+  --h-steel: #66728a;
+  --h-rust: #c2483d;
+  --h-ember: #f26a2a;
+  --h-amber: #f6a823;
+  --h-gold: #ffd36b;
+  --h-cool: #2fd49b;
+}
+
+@theme inline {
+  --font-sans: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+
+  --color-steel: var(--h-steel);
+  --color-rust: var(--h-rust);
+  --color-ember: var(--h-ember);
+  --color-amber: var(--h-amber);
+  --color-gold: var(--h-gold);
+  --color-cool: var(--h-cool);
+}
+
+html,
+body,
+#root {
+  height: 100%;
 }
 
 body {
-  @apply bg-zinc-950 text-zinc-100 antialiased;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--h-ember) 35%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Thin, quiet scrollbars (log viewer, long lists). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+dialog::backdrop {
+  background: rgb(4 6 9 / 0.62);
+  backdrop-filter: blur(3px);
+}
+
+/* ── Heat bar: the active segment flows and glows ───────────────────── */
+@keyframes heat-flow {
+  from { background-position: 0% 50%; }
+  to   { background-position: 200% 50%; }
+}
+
+@keyframes heat-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+.heat-active {
+  background-image: linear-gradient(
+    90deg,
+    var(--seg),
+    color-mix(in oklab, var(--seg) 55%, white),
+    var(--seg)
+  );
+  background-size: 200% 100%;
+  animation: heat-flow 1.6s linear infinite;
+}
+
+.heat-dot-active {
+  animation: heat-breathe 1.4s ease-in-out infinite;
+}
+
+/* One orchestrated moment: the sign-in panel's bar heats up once, then idles. */
+@keyframes heat-rise {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+.heat-rise {
+  transform-origin: left center;
+  animation: heat-rise 1.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heat-active,
+  .heat-dot-active,
+  .heat-rise {
+    animation: none;
+  }
 }

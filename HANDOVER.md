@@ -31,8 +31,8 @@ Details: `deployment-worker/README.md`, `infra/README.md`.
 |---|---|
 | `backend/` | API, auth, projects, deployments, env vars, GitHub OAuth/webhooks, reconciler. `Dockerfile`. |
 | `deployment-worker/` | Pipeline (`src/processors`), services grouped by `build/`, `deployment/`, `hosting/`. `Dockerfile`, `README.md`. |
-| `frontend/` | Minimal dashboard (login, projects, deployments with live logs, env vars, GitHub). |
-| `infra/` | Dev + prod compose, Nginx (shared config, snippets, dev/prod templates), scripts, runbook. |
+| `frontend/` | Dashboard: sidebar layout, light/dark theme, heat-bar pipeline, project cards, grouped live build logs, env vars, GitHub import. Design tokens in `src/index.css`, shared components in `src/components/ui/`. |
+| `infra/` | Dev, prod (VPS) and tunnel compose, Nginx (shared config, snippets, dev/prod/tunnel templates), scripts, runbook (`README.md`), daily commands (`OPERATIONS.md`). |
 | `.github/workflows/ci.yml` | Typecheck/build all packages, Nginx config test, compose validation, image builds. |
 
 ## 3. Status
@@ -47,7 +47,8 @@ Details: `deployment-worker/README.md`, `infra/README.md`.
 | Env vars injected into build (redacted in logs) and runtime | Verified (dev) |
 | Domain-agnostic Nginx (dev + prod templates, map-based runtime routes) | Validated: routing tests for static, SPA, runtime, dashboard, API, HTTPS, redirects, unknown hosts, real IP |
 | Production compose, Dockerfiles, TLS issuance/renewal | Validated (compose config, builds compile and load); **not run on a VPS** |
-| Production dashboard UI | Not started (planned next) |
+| Production dashboard UI | Redesigned (verified against a mock API in a real browser at desktop and mobile widths; not yet exercised against the live backend) |
+| Cloudflare Tunnel mode (`docker-compose.tunnel.yml`) | **Running** at `app.shipnest.dpdns.org` on a Windows laptop (Docker Desktop); operating commands in `infra/OPERATIONS.md` |
 
 ## 4. Changes in the latest round
 

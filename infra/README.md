@@ -4,7 +4,9 @@
 |---|---|
 | `docker-compose.yml` | Development: Redis + Nginx on `127.0.0.1`. Backend and worker run on your machine. |
 | `docker-compose.prod.yml` | Production on one Linux VPS: everything in containers, HTTPS. |
-| `nginx/` | Shared Nginx config, plus `templates/dev` and `templates/prod`. |
+| `docker-compose.tunnel.yml` | Same stack on any machine (laptop, home server) behind a Cloudflare Tunnel: no public IP, no open ports. |
+| `nginx/` | Shared Nginx config, plus `templates/dev`, `templates/prod` and `templates/tunnel`. |
+| `OPERATIONS.md` | Daily commands: start, update, logs, restart, backups, troubleshooting (tunnel setup). |
 | `scripts/` | `prepare-host.sh` (data folders), `issue-certificate.sh` (first certificate). |
 
 ## Production architecture
@@ -112,9 +114,10 @@ The dashboard is served from `/srv/forgedeploy/dashboard`. Until the production
 frontend is ready, `app.<domain>` shows an empty page; the API works regardless.
 
 ```bash
-cd frontend && npm ci && npm run build
-sudo cp -r dist/. /srv/forgedeploy/dashboard/
+docker compose -f infra/docker-compose.prod.yml --env-file infra/.env --profile tools run --rm dashboard-build
 ```
+
+(This builds `frontend/` in a throwaway Node container and publishes it; no Node install is needed on the host.)
 
 ## 6. Operations
 
@@ -153,3 +156,53 @@ sudo cp -r dist/. /srv/forgedeploy/dashboard/
 | `502` on a runtime deployment | Its container stopped: `docker ps -a --filter name=forgedeploy-runtime-<id>` |
 | Clone fails with authentication errors | Reconnect GitHub; the stored token was revoked |
 | GitHub login redirects to the wrong host | OAuth app callback URL must be `https://app.<domain>/api/github/callback` |
+
+## 9. Run it on your own machine (Cloudflare Tunnel)
+
+For a laptop or home server with no public IP. `cloudflared` opens an outbound connection to
+Cloudflare, which forwards `app.<domain>` and `*.<domain>` to Nginx. Cloudflare provides the
+HTTPS certificate, so there is no certbot, no `cloudflare.ini` and no open port.
+
+The machine must stay on for the sites to be reachable. Setup is the same as sections 1-6,
+with these differences:
+
+1. **Domain:** add it to Cloudflare (Free plan) and wait until it shows **Active**.
+   Wildcards work on the free plan only one level deep: `<id>.<domain>` and `app.<domain>`.
+2. **Settings:** `cp infra/.env.example infra/.env` (`ACME_EMAIL` is unused). On Docker
+   Desktop (Windows/macOS) keep `FORGEDEPLOY_DATA_DIR=/srv/forgedeploy`: it is a folder inside
+   Docker's Linux VM, used consistently by every container.
+3. **Create the tunnel** (run from the repository root; `tunnel login` prints a URL, open it,
+   pick your domain and authorize):
+
+   ```bash
+   mkdir -p infra/cloudflared
+   docker run --rm -it -v "$PWD/infra/cloudflared:/home/nonroot/.cloudflared" cloudflare/cloudflared:latest tunnel login
+   docker run --rm -it -v "$PWD/infra/cloudflared:/home/nonroot/.cloudflared" cloudflare/cloudflared:latest tunnel create forgedeploy
+   ```
+
+   This writes `cert.pem` and `<TUNNEL_ID>.json` into `infra/cloudflared/` (both are git-ignored).
+   Copy `infra/cloudflared/config.yml.example` to `config.yml` and replace `<TUNNEL_ID>`
+   and `example.com`.
+4. **DNS** (Cloudflare → your domain → DNS): two `CNAME` records, both **Proxied** (orange cloud):
+
+   | Name | Target |
+   |---|---|
+   | `@` | `<TUNNEL_ID>.cfargotunnel.com` |
+   | `*` | `<TUNNEL_ID>.cfargotunnel.com` |
+
+   Under SSL/TLS, set the mode to **Full** and turn on **Always Use HTTPS**.
+5. **Start** (no `prepare-host.sh` or `issue-certificate.sh` needed):
+
+   ```bash
+   docker compose -f infra/docker-compose.tunnel.yml --env-file infra/.env up -d --build
+   ```
+
+6. **Dashboard:** `docker compose -f infra/docker-compose.tunnel.yml --env-file infra/.env --profile tools run --rm dashboard-build`
+7. **MongoDB Atlas:** allow your current public IP (or `0.0.0.0/0` for a home connection
+   whose IP changes; the database user's password is then the only protection).
+
+Verify with `curl -s https://app.<domain>/api/health`. Updating and logs work as in section 6,
+with `docker-compose.tunnel.yml` instead of the prod file.
+
+On Windows keep Docker Desktop running (enable *Start Docker Desktop when you sign in*) and
+prevent the machine from sleeping while it should serve traffic.

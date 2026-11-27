@@ -1,0 +1,154 @@
+# ForgeDeploy behind a Cloudflare Tunnel: no public IP, no open ports, no certificates.
+# Runs on any machine with Docker (a laptop, a home server, a VPS). Setup: infra/README.md,
+# section "Run it on your own machine".
+#
+#   docker compose -f infra/docker-compose.tunnel.yml --env-file infra/.env up -d --build
+#
+# Same services as docker-compose.prod.yml, except:
+#   - nginx publishes no ports and serves plain HTTP; Cloudflare terminates TLS
+#   - `cloudflared` carries traffic from Cloudflare to nginx (outbound connection only)
+#   - no certbot
+
+name: forgedeploy
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in infra/.env}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *logging
+
+  backend:
+    build: ../backend
+    image: forgedeploy-backend:latest
+    restart: unless-stopped
+    env_file: ../backend/.env.production
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "5000"
+      TRUST_PROXY: "true"
+      API_DOCS_ENABLED: "false"
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      FRONTEND_URL: https://app.${DEPLOYMENT_DOMAIN:?set DEPLOYMENT_DOMAIN in infra/.env}
+      GITHUB_CALLBACK_URL: https://app.${DEPLOYMENT_DOMAIN}/api/github/callback
+      GITHUB_WEBHOOK_URL: https://app.${DEPLOYMENT_DOMAIN}/api/github/webhook
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+    logging: *logging
+
+  worker:
+    build: ../deployment-worker
+    image: forgedeploy-worker:latest
+    restart: unless-stopped
+    env_file: ../deployment-worker/.env.production
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      TEMP_DIR: ${FORGEDEPLOY_DATA_DIR}/temp
+      LOG_DIR: ${FORGEDEPLOY_DATA_DIR}/logs
+      DEPLOYMENTS_DIR: ${FORGEDEPLOY_DATA_DIR}/deployments
+      RUNTIME_NGINX_DIR: ${FORGEDEPLOY_DATA_DIR}/runtime-nginx
+      DEPLOYMENT_BASE_URL: https://${DEPLOYMENT_DOMAIN}
+      HEALTH_CHECK_URL: http://nginx:8080
+      NGINX_CONTAINER_NAME: forgedeploy-nginx
+      RUNTIME_DOCKER_NETWORK: forgedeploy-apps
+    volumes:
+      # Drives the host's Docker (builds, runtime containers, Nginx reloads).
+      # Root-equivalent access to the host: acceptable for trusted users only.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path inside and outside the container: the worker passes these paths
+      # to `docker run --volume`, which the host's Docker daemon resolves.
+      - ${FORGEDEPLOY_DATA_DIR:?set FORGEDEPLOY_DATA_DIR in infra/.env}:${FORGEDEPLOY_DATA_DIR}
+    depends_on:
+      redis:
+        condition: service_healthy
+      nginx:
+        condition: service_started
+    networks:
+      - internal
+    # Let running jobs finish or hand back cleanly on `docker compose down/up`.
+    stop_grace_period: 2m
+    logging: *logging
+
+  nginx:
+    image: nginx:1.27-alpine
+    # Fixed name: the worker reloads it with `docker exec forgedeploy-nginx ...`.
+    container_name: forgedeploy-nginx
+    restart: unless-stopped
+    environment:
+      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - ./nginx/templates/tunnel:/etc/nginx/templates:ro
+      - ${FORGEDEPLOY_DATA_DIR}/deployments:/srv/deployments:ro
+      - ${FORGEDEPLOY_DATA_DIR}/runtime-nginx:/etc/nginx/runtime:ro
+      - ${FORGEDEPLOY_DATA_DIR}/dashboard:/srv/dashboard:ro
+    depends_on:
+      - backend
+    networks:
+      - internal
+      - apps
+    logging: *logging
+
+  # Outbound-only connection to Cloudflare; routes app.<domain> and *.<domain> to nginx.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    depends_on:
+      - nginx
+    networks:
+      - internal
+    logging: *logging
+
+  # One-off: builds frontend/ and publishes it to the dashboard folder.
+  #   docker compose -f <this file> --env-file infra/.env --profile tools run --rm dashboard-build
+  dashboard-build:
+    image: node:22-alpine
+    profiles: ["tools"]
+    working_dir: /build
+    volumes:
+      - ../frontend:/src:ro
+      - ${FORGEDEPLOY_DATA_DIR:?set FORGEDEPLOY_DATA_DIR in infra/.env}/dashboard:/out
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        tar -C /src --exclude=node_modules --exclude=dist -cf - . | tar -C /build -xf -
+        npm ci
+        npm run build
+        rm -rf /out/* /out/.[!.]*
+        cp -r dist/. /out/
+
+volumes:
+  redis-data:
+
+networks:
+  internal:
+    name: forgedeploy-internal
+  apps:
+    name: forgedeploy-apps

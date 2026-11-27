@@ -397,6 +397,9 @@ export async function exportBuildOutput(options: {
 
   await fs.rm(destination, { recursive: true, force: true });
   await fs.mkdir(destination, { recursive: true });
+  // The export container runs as the unprivileged build user, which is not the
+  // worker's user, so it needs write access to this (transient) directory.
+  await fs.chmod(destination, 0o777);
 
   try {
     await runSandboxed({

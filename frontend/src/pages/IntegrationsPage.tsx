@@ -1,7 +1,16 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { Button, Card, ErrorBox, Loading, PageHeader } from "../components/ui";
+import {
+  Button,
+  Card,
+  ConfirmDialog,
+  ErrorBox,
+  GitHubIcon,
+  Notice,
+  PageHeader,
+  Skeleton,
+} from "../components/ui";
 import { timeAgo } from "../lib/format";
 import { keys, useConnectGitHub, useDisconnectGitHub, useGitHubAccount } from "../lib/queries";
 
@@ -11,6 +20,7 @@ export function IntegrationsPage({ github }: { github?: "success" | "error" }) {
   const account = useGitHubAccount();
   const connect = useConnectGitHub();
   const disconnect = useDisconnectGitHub();
+  const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     if (github === "success") {
@@ -22,72 +32,70 @@ export function IntegrationsPage({ github }: { github?: "success" | "error" }) {
     <>
       <PageHeader title="Integrations" description="Connect the accounts ForgeDeploy deploys from." />
 
-      {github === "success" && (
-        <div className="mb-6 rounded-md border border-emerald-900 bg-emerald-950/40 px-3 py-2 text-sm text-emerald-200">
-          GitHub connected.
-        </div>
-      )}
-      {github === "error" && (
-        <div className="mb-6 rounded-md border border-red-900 bg-red-950/40 px-3 py-2 text-sm text-red-200">
-          GitHub connection failed. Try again.
-        </div>
-      )}
+      <div className="max-w-3xl space-y-4">
+        {github === "success" && <Notice tone="success">GitHub connected.</Notice>}
+        {github === "error" && <Notice tone="error">GitHub connection failed. Try again.</Notice>}
 
-      <Card className="p-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            {account.data?.avatarUrl ? (
-              <img src={account.data.avatarUrl} alt="" className="size-10 rounded-full" />
-            ) : (
-              <div className="grid size-10 place-items-center rounded-full bg-zinc-800 text-sm font-semibold">GH</div>
-            )}
-            <div>
-              <p className="font-medium">GitHub</p>
-              {account.isPending ? (
-                <Loading label="Checking…" />
-              ) : account.data ? (
-                <p className="text-sm text-zinc-400">
-                  Connected as <span className="text-zinc-200">@{account.data.githubUsername}</span> ·{" "}
-                  {timeAgo(account.data.connectedAt)}
-                </p>
+        <Card className="p-6">
+          <div className="flex flex-wrap items-center justify-between gap-5">
+            <div className="flex min-w-0 items-center gap-4">
+              {account.data?.avatarUrl ? (
+                <img src={account.data.avatarUrl} alt="" className="size-12 rounded-full ring-1 ring-line" />
               ) : (
-                <p className="text-sm text-zinc-400">Not connected. Required to import and clone repositories.</p>
+                <div className="grid size-12 place-items-center rounded-full border border-line bg-raised">
+                  <GitHubIcon className="size-6" />
+                </div>
               )}
+
+              <div className="min-w-0">
+                <p className="text-base font-semibold">GitHub</p>
+                {account.isPending ? (
+                  <Skeleton className="mt-1.5 h-4 w-56" />
+                ) : account.data ? (
+                  <p className="text-sm text-muted">
+                    Connected as <span className="font-medium text-fg">@{account.data.githubUsername}</span> · {timeAgo(account.data.connectedAt)}
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted">Not connected. Needed to import and clone repositories.</p>
+                )}
+              </div>
             </div>
+
+            {account.data ? (
+              <div className="flex gap-2">
+                <Button variant="secondary" loading={connect.isPending} onClick={() => connect.mutate()}>
+                  Reconnect
+                </Button>
+                <Button variant="danger" onClick={() => setConfirming(true)}>
+                  Disconnect
+                </Button>
+              </div>
+            ) : (
+              !account.isPending && (
+                <Button loading={connect.isPending} onClick={() => connect.mutate()}>
+                  <GitHubIcon /> Connect GitHub
+                </Button>
+              )
+            )}
           </div>
 
-          {account.data ? (
-            <div className="flex gap-2">
-              <Button variant="secondary" loading={connect.isPending} onClick={() => connect.mutate()}>
-                Reconnect
-              </Button>
-              <Button
-                variant="danger"
-                loading={disconnect.isPending}
-                onClick={() => {
-                  if (confirm("Disconnect GitHub? Deployments will fail to clone until you reconnect.")) {
-                    disconnect.mutate();
-                  }
-                }}
-              >
-                Disconnect
-              </Button>
-            </div>
-          ) : (
-            !account.isPending && (
-              <Button loading={connect.isPending} onClick={() => connect.mutate()}>
-                Connect GitHub
-              </Button>
-            )
-          )}
-        </div>
+          <div className="mt-4 space-y-2 empty:hidden">
+            <ErrorBox error={account.error} />
+            <ErrorBox error={connect.error} />
+          </div>
+        </Card>
+      </div>
 
-        <div className="mt-4 space-y-2">
-          <ErrorBox error={account.error} />
-          <ErrorBox error={connect.error} />
-          <ErrorBox error={disconnect.error} />
-        </div>
-      </Card>
+      <ConfirmDialog
+        open={confirming}
+        title="Disconnect GitHub?"
+        description="Deployments fail to clone until you reconnect."
+        confirmLabel="Disconnect"
+        pending={disconnect.isPending}
+        error={disconnect.error}
+        onClose={() => setConfirming(false)}
+        onConfirm={() => disconnect.mutate(undefined, { onSuccess: () => setConfirming(false) })}
+      />
     </>
   );
 }

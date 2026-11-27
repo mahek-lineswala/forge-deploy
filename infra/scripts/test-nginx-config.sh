@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validates the dev and prod Nginx configs with the same image the stacks use.
+# Validates the dev, prod and tunnel Nginx configs with the same image the stacks use.
 # Usage: infra/scripts/test-nginx-config.sh   (needs Docker; used by CI)
 set -euo pipefail
 
@@ -17,7 +17,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$DOMAIN" \
 # One runtime route in the format the worker writes.
 printf '# Managed by ForgeDeploy. Do not edit.\naaaaaaaaaaaaaaaaaaaaaaaa forgedeploy-runtime-test:3000;\n' > "$WORK/runtime/aaaaaaaaaaaaaaaaaaaaaaaa.map"
 
-for mode in dev prod; do
+for mode in dev prod tunnel; do
   echo "== nginx -t ($mode)"
   docker run --rm \
     -e DEPLOYMENT_DOMAIN="$([ "$mode" = dev ] && echo localhost || echo "$DOMAIN")" \

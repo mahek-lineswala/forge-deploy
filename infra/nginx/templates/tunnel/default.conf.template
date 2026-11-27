@@ -1,0 +1,88 @@
+# Cloudflare Tunnel mode: plain HTTP behind `cloudflared`. TLS terminates at Cloudflare,
+# nothing is published to the internet and no certificate is needed.
+#
+#   https://app.${DEPLOYMENT_DOMAIN}       dashboard + API (/api -> backend)
+#   https://<id>.${DEPLOYMENT_DOMAIN}      deployments
+#   http://nginx:8080 (internal only)      worker health checks
+
+# Visitor IP: cloudflared reaches Nginx from the Docker network and passes Cloudflare's
+# CF-Connecting-IP header along.
+set_real_ip_from 172.16.0.0/12;
+real_ip_header   CF-Connecting-IP;
+
+server {
+  listen 80 default_server;
+  server_name _;
+
+  location = /healthz {
+    access_log off;
+    default_type text/plain;
+    return 200 "ok\n";
+  }
+
+  location / {
+    return 404;
+  }
+}
+
+# ── Apex domain -> dashboard ────────────────────────────────────────
+server {
+  listen 80;
+  server_name ${DEPLOYMENT_DOMAIN};
+
+  return 301 https://app.${DEPLOYMENT_DOMAIN}$request_uri;
+}
+
+# ── Dashboard + API ─────────────────────────────────────────────────
+server {
+  listen 80;
+  server_name app.${DEPLOYMENT_DOMAIN};
+
+  # GitHub webhook payloads can be up to 25 MB.
+  location /api/ {
+    client_max_body_size 25m;
+
+    # Resolved per request, so Nginx keeps serving deployments while the backend restarts.
+    set $forgedeploy_backend http://backend:5000;
+    proxy_pass $forgedeploy_backend;
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_read_timeout 60s;
+  }
+
+  # Built dashboard (frontend/dist), mounted at /srv/dashboard.
+  root  /srv/dashboard;
+  index index.html;
+
+  location /assets/ {
+    try_files $uri =404;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+  }
+
+  location / {
+    try_files $uri /index.html =404;
+    add_header Cache-Control "no-cache" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "DENY" always;
+  }
+}
+
+# ── Deployments ─────────────────────────────────────────────────────
+server {
+  listen 80;
+  server_name *.${DEPLOYMENT_DOMAIN};
+
+  include /etc/nginx/snippets/deployment-site.conf;
+}
+
+# ── Internal plain HTTP for worker health checks (port not published) ──
+server {
+  listen 8080;
+  server_name *.${DEPLOYMENT_DOMAIN};
+
+  include /etc/nginx/snippets/deployment-site.conf;
+}

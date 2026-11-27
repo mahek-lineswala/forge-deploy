@@ -31,6 +31,7 @@ export interface ProjectInput {
   branch?: string;
   framework?: ProjectFramework | null;
   buildCommand?: string | null;
+  startCommand?: string | null;
   outputDir?: string | null;
   rootDir?: string;
 }
