@@ -1,6 +1,8 @@
 
 import { z } from "zod";
 
+import { subdomainSchema } from "./subdomain.js";
+
 // ============================================
 // ZOD VALIDATION
 // ============================================
@@ -58,7 +60,11 @@ export const createProjectBodySchema = z.object({
 
 // UPDATE PROJECT
 export const updateProjectBodySchema = z
-  .object(projectFields)
+  .object({
+    ...projectFields,
+    // null removes the custom subdomain.
+    subdomain: subdomainSchema.nullable(),
+  })
   .partial()
   .refine((body) => Object.keys(body).length > 0, {
     message: "Provide at least one field to update",
@@ -143,7 +149,15 @@ export const updateProjectBodyJsonSchema = {
   type: "object",
   additionalProperties: false,
   minProperties: 1,
-  properties: projectRequestProperties,
+  properties: {
+    ...projectRequestProperties,
+    subdomain: {
+      type: ["string", "null"],
+      maxLength: 40,
+      description: "Custom name for the live URL (<name>.<deployment domain>); null removes it",
+      examples: ["my-portfolio"],
+    },
+  },
 } as const;
 
 // ============================================
@@ -165,6 +179,7 @@ const projectJsonSchema = {
     startCommand: nullableString,
     outputDir: nullableString,
     rootDir: { type: "string" },
+    subdomain: nullableString,
     createdAt: { type: "string", format: "date-time" },
     updatedAt: { type: "string", format: "date-time" },
   },

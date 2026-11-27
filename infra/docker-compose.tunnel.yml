@@ -50,6 +50,7 @@ services:
       FRONTEND_URL: https://app.${DEPLOYMENT_DOMAIN:?set DEPLOYMENT_DOMAIN in infra/.env}
       GITHUB_CALLBACK_URL: https://app.${DEPLOYMENT_DOMAIN}/api/github/callback
       GITHUB_WEBHOOK_URL: https://app.${DEPLOYMENT_DOMAIN}/api/github/webhook
+      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN}
     depends_on:
       redis:
         condition: service_healthy

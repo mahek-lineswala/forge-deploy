@@ -173,7 +173,8 @@ export async function projectRoutes(app: FastifyInstance) {
       schema: {
         tags: ["Projects"],
         summary: "Delete project",
-        description: "Deletes a project and its deployments.",
+        description:
+          "Deletes a project and all of its data: deployments and logs, environment variables, the GitHub webhook, running containers and published files.",
         security: projectSecurity,
         params: projectIdParamsJsonSchema,
         response: deleteProjectResponseSchema,

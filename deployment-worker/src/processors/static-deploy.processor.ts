@@ -14,6 +14,7 @@ import {
   supersedeOtherDeployments,
 } from "../services/deployment/deployment.service.js";
 
+import { syncAliasForDeployment } from "../services/hosting/alias.service.js";
 import { generateDeploymentUrl } from "../services/hosting/domain.service.js";
 import { checkDeploymentHealth } from "../services/hosting/health.service.js";
 import { NonRetryableError } from "../utils/errors.js";
@@ -202,6 +203,21 @@ export async function deployStaticBuild(
       console.error(
         `Could not supersede other deployments for ${build.deploymentId}:`,
         error,
+      );
+    }
+
+    try {
+      await syncAliasForDeployment(build.deploymentId);
+    } catch (error) {
+      console.error(
+        `Could not update the custom subdomain for ${build.deploymentId}:`,
+        error,
+      );
+
+      await writeDeploymentLogSafely(
+        build.deploymentId,
+        "Deployment is live, but its custom subdomain could not be updated yet. It is retried automatically.",
+        "WARN",
       );
     }
 

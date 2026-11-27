@@ -20,6 +20,7 @@ import {
   KeyIcon,
   LayersIcon,
   Loading,
+  Notice,
   PageHeader,
   ProjectMark,
   Select,
@@ -29,8 +30,11 @@ import {
   TrashIcon,
   cx,
 } from "../components/ui";
+import { aliasUrl, liveUrl } from "../lib/domain";
 import { formatDuration, shortSha, timeAgo } from "../lib/format";
 import {
+  useAutoDeploy,
+  useConfig,
   useCreateDeployment,
   useDeleteEnvVar,
   useDeleteProject,
@@ -38,6 +42,7 @@ import {
   useEnvVars,
   useProject,
   useSaveEnvVar,
+  useSetAutoDeploy,
   useUpdateProject,
 } from "../lib/queries";
 import type { Deployment, Project, ProjectFramework } from "../lib/types";
@@ -62,6 +67,7 @@ export function ProjectPage({ projectId, tab = "deployments" }: { projectId: str
   if (project.error) return <ErrorBox error={project.error} />;
 
   const live = deployments.data?.find((d) => d.status === "READY");
+  const publicUrl = liveUrl(project.data, live);
 
   const deploy = async () => {
     const deployment = await createDeployment.mutateAsync();
@@ -93,8 +99,8 @@ export function ProjectPage({ projectId, tab = "deployments" }: { projectId: str
         }
         actions={
           <>
-            {live?.deploymentUrl && (
-              <a href={live.deploymentUrl} target="_blank" rel="noreferrer">
+            {publicUrl && (
+              <a href={publicUrl} target="_blank" rel="noreferrer">
                 <Button variant="secondary">
                   Visit <ExternalIcon />
                 </Button>
@@ -111,7 +117,7 @@ export function ProjectPage({ projectId, tab = "deployments" }: { projectId: str
         <ErrorBox error={createDeployment.error} />
       </div>
 
-      <ProductionCard deployments={deployments.data} loading={deployments.isPending} onDeploy={() => void deploy().catch(() => undefined)} deploying={createDeployment.isPending} />
+      <ProductionCard publicUrl={publicUrl} deployments={deployments.data} loading={deployments.isPending} onDeploy={() => void deploy().catch(() => undefined)} deploying={createDeployment.isPending} />
 
       <div role="tablist" aria-label="Project sections" className="mt-10 mb-6 flex gap-1 border-b border-line">
         {TABS.map((item) => {
@@ -147,11 +153,13 @@ export function ProjectPage({ projectId, tab = "deployments" }: { projectId: str
 // ============================================
 
 function ProductionCard({
+  publicUrl,
   deployments,
   loading,
   onDeploy,
   deploying,
 }: {
+  publicUrl: string | null;
   deployments: Deployment[] | undefined;
   loading: boolean;
   onDeploy: () => void;
@@ -186,14 +194,19 @@ function ProductionCard({
             <div className="min-w-0">
               <p className="text-sm text-muted">Production</p>
               <a
-                href={live.deploymentUrl ?? "#"}
+                href={publicUrl ?? "#"}
                 target="_blank"
                 rel="noreferrer"
                 className="mt-1 flex items-center gap-2 text-xl font-semibold tracking-[-0.01em] hover:underline"
               >
                 <GlobeIcon className="size-5 text-cool" />
-                <span className="truncate">{live.deploymentUrl ? stripScheme(live.deploymentUrl) : "—"}</span>
+                <span className="truncate">{publicUrl ? stripScheme(publicUrl) : "—"}</span>
               </a>
+              {live.deploymentUrl && publicUrl !== live.deploymentUrl && (
+                <p className="mt-1.5 truncate font-mono text-[13px] text-muted">
+                  Permanent link: {stripScheme(live.deploymentUrl)}
+                </p>
+              )}
             </div>
             <StatusBadge status={live.status} />
           </div>
@@ -525,10 +538,15 @@ function SettingsTab({ project }: { project: Project }) {
         </form>
       </Card>
 
+      <DomainCard project={project} />
+
+      <AutoDeployCard projectId={project.id} />
+
       <Card className="border-bad/30 p-6">
         <h2 className="text-base font-semibold text-bad">Delete project</h2>
         <p className="mt-1 text-sm text-muted">
-          Removes the project and its environment variables. This cannot be undone.
+          Takes the site offline and permanently removes the project, every deployment and its logs, the environment
+          variables and the GitHub auto-deploy hook. This cannot be undone.
         </p>
         <Button variant="danger" className="mt-4" onClick={() => setConfirmingDelete(true)}>
           <TrashIcon /> Delete project
@@ -538,7 +556,7 @@ function SettingsTab({ project }: { project: Project }) {
       <ConfirmDialog
         open={confirmingDelete}
         title="Delete this project?"
-        description="The project and its environment variables are removed. This cannot be undone."
+        description="The site goes offline and all of the project's data is deleted: deployments, logs, environment variables and files. This cannot be undone."
         confirmLabel="Delete project"
         confirmText={project.name}
         pending={remove.isPending}
@@ -547,5 +565,158 @@ function SettingsTab({ project }: { project: Project }) {
         onConfirm={() => void remove.mutateAsync().then(() => navigate({ to: "/" })).catch(() => undefined)}
       />
     </div>
+  );
+}
+
+// ============================================
+// DOMAIN (custom subdomain)
+// ============================================
+
+function DomainCard({ project }: { project: Project }) {
+  const config = useConfig();
+  const update = useUpdateProject(project.id);
+  const [value, setValue] = useState(project.subdomain ?? "");
+  const [done, setDone] = useState<"saved" | "removed" | null>(null);
+
+  const domain = config.data?.deploymentDomain;
+
+  // Without a configured deployment domain (local development) there is nothing to attach a name to.
+  if (!domain) return null;
+
+  const name = value.trim().toLowerCase();
+  const dirty = name !== (project.subdomain ?? "");
+
+  const save = async (next: string | null) => {
+    setDone(null);
+    await update.mutateAsync({ subdomain: next });
+
+    if (next === null) setValue("");
+    setDone(next === null ? "removed" : "saved");
+  };
+
+  return (
+    <Card className="p-6">
+      <h2 className="text-base font-semibold">Domain</h2>
+      <p className="mt-1 text-sm text-muted">
+        Choose the name of your live URL. It always shows your latest successful deployment. Every deployment also keeps
+        its own permanent link.
+      </p>
+
+      <form
+        className="mt-4 space-y-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (name) void save(name).catch(() => undefined);
+        }}
+      >
+        <Field
+          label="Subdomain"
+          hint="3–40 characters: lowercase letters, numbers and hyphens."
+        >
+          <div className="flex items-stretch">
+            <Input
+              value={value}
+              onChange={(event) => {
+                setValue(event.target.value);
+                setDone(null);
+              }}
+              placeholder="my-project"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              maxLength={40}
+              className="rounded-r-none border-r-0"
+            />
+            <span className="flex items-center rounded-r-lg border border-line-strong bg-raised px-3 font-mono text-[13px] text-muted">
+              .{domain}
+            </span>
+          </div>
+        </Field>
+
+        <ErrorBox error={update.error} />
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="submit" loading={update.isPending} disabled={!name || !dirty}>
+            Save domain
+          </Button>
+          {project.subdomain && (
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={update.isPending}
+              onClick={() => void save(null).catch(() => undefined)}
+            >
+              Remove
+            </Button>
+          )}
+          {done === "saved" && <span className="text-sm text-ok">Saved. It can take a few seconds to go live.</span>}
+          {done === "removed" && <span className="text-sm text-ok">Removed.</span>}
+        </div>
+
+        {project.subdomain && (
+          <p className="truncate font-mono text-[13px] text-muted">
+            Live at{" "}
+            <a
+              className="text-fg underline-offset-2 hover:underline"
+              href={aliasUrl(`https://x.${domain}`, project.subdomain)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {project.subdomain}.{domain}
+            </a>
+          </p>
+        )}
+      </form>
+    </Card>
+  );
+}
+
+// ============================================
+// AUTO-DEPLOY (GitHub push webhook)
+// ============================================
+
+function AutoDeployCard({ projectId }: { projectId: string }) {
+  const status = useAutoDeploy(projectId);
+  const setAutoDeploy = useSetAutoDeploy(projectId);
+
+  const enabled = status.data?.enabled ?? false;
+  const available = status.data?.available ?? true;
+
+  return (
+    <Card className="p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-semibold">Auto-deploy</h2>
+            {status.data && <Badge>{enabled ? "On" : "Off"}</Badge>}
+          </div>
+          <p className="mt-1 max-w-prose text-sm text-muted">
+            Deploy automatically whenever you push to the project's branch. This adds a webhook to the GitHub repository
+            and needs your GitHub account to be connected.
+          </p>
+        </div>
+
+        {status.data && (
+          <Button
+            variant={enabled ? "secondary" : "primary"}
+            loading={setAutoDeploy.isPending}
+            disabled={!enabled && !available}
+            onClick={() => void setAutoDeploy.mutateAsync(!enabled).catch(() => undefined)}
+          >
+            {enabled ? "Turn off" : "Turn on"}
+          </Button>
+        )}
+      </div>
+
+      {status.data && !available && !enabled && (
+        <div className="mt-4">
+          <Notice tone="info">Auto-deploy is not available: this server has no public webhook URL configured.</Notice>
+        </div>
+      )}
+
+      <div className="mt-4 empty:hidden">
+        <ErrorBox error={status.error ?? setAutoDeploy.error} />
+      </div>
+    </Card>
   );
 }

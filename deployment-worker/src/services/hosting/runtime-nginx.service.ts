@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { env } from "../../config/env.js";
 import { docker } from "../../lib/docker.js";
-import { assertDeploymentId } from "../../utils/deployment-id.js";
+import { assertDeploymentId, isDeploymentId } from "../../utils/deployment-id.js";
 
 /**
  * Runtime routes are entries of the Nginx map `$deployment_id -> $runtime_upstream`
@@ -78,9 +78,8 @@ async function testAndReload(): Promise<void> {
   });
 }
 
-/** Writes (or removes) one route file, validates, reloads; restores the previous file on failure. */
-async function applyRoute(deploymentId: string, content: string | null): Promise<void> {
-  const filePath = routePath(deploymentId);
+/** Writes (or removes) one Nginx include file, validates, reloads; restores the previous file on failure. */
+async function applyFile(filePath: string, content: string | null): Promise<void> {
   const previous = await readIfExists(filePath);
 
   if (previous === content) return;
@@ -126,7 +125,7 @@ export function addRuntimeRoute(deploymentId: string, containerName: string, por
   validateContainerName(containerName);
   validatePort(port);
 
-  return serialize(() => applyRoute(deploymentId, createRouteConfig(deploymentId, containerName, port)));
+  return serialize(() => applyFile(routePath(deploymentId), createRouteConfig(deploymentId, containerName, port)));
 }
 
 /**
@@ -170,5 +169,62 @@ export function migrateLegacyRuntimeRoutes(): Promise<number> {
 export function removeRuntimeRoute(deploymentId: string): Promise<void> {
   assertDeploymentId(deploymentId);
 
-  return serialize(() => applyRoute(deploymentId, null));
+  return serialize(() => applyFile(routePath(deploymentId), null));
+}
+
+// ── Custom subdomains ───────────────────────────────────────────────
+//
+// A project's custom name (<name>.<domain>) is an entry of the Nginx map
+// `$host -> $deployment_id` (infra/nginx/nginx.conf), one file per name:
+//
+//   <RUNTIME_NGINX_DIR>/aliases/<name>.alias   containing   "<name>.<domain>" <deploymentId>;
+//
+// Pointing the name at another deployment id makes the shared deployment server
+// block serve (or proxy to) that deployment, so no other configuration changes.
+
+const ALIAS_EXTENSION = ".alias";
+const SUBDOMAIN_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/;
+
+function assertSubdomain(subdomain: string): void {
+  if (!SUBDOMAIN_PATTERN.test(subdomain) || isDeploymentId(subdomain)) {
+    throw new Error("Invalid subdomain.");
+  }
+}
+
+function aliasDirectory(): string {
+  return path.join(routeDirectory(), "aliases");
+}
+
+function aliasPath(subdomain: string): string {
+  return path.join(aliasDirectory(), `${subdomain}${ALIAS_EXTENSION}`);
+}
+
+export function aliasHost(subdomain: string): string {
+  assertSubdomain(subdomain);
+
+  return `${subdomain}.${new URL(env.DEPLOYMENT_BASE_URL).hostname}`;
+}
+
+export function setSubdomainAlias(subdomain: string, deploymentId: string): Promise<void> {
+  assertDeploymentId(deploymentId);
+
+  const content = `# Managed by ForgeDeploy. Do not edit.\n"${aliasHost(subdomain)}" ${deploymentId};\n`;
+
+  return serialize(() => applyFile(aliasPath(subdomain), content));
+}
+
+export function removeSubdomainAlias(subdomain: string): Promise<void> {
+  assertSubdomain(subdomain);
+
+  return serialize(() => applyFile(aliasPath(subdomain), null));
+}
+
+/** Names that currently have an alias file (for reconciliation). */
+export async function listSubdomainAliases(): Promise<string[]> {
+  const entries = await fs.readdir(aliasDirectory()).catch(() => [] as string[]);
+
+  return entries
+    .filter((entry) => entry.endsWith(ALIAS_EXTENSION))
+    .map((entry) => entry.slice(0, -ALIAS_EXTENSION.length))
+    .filter((name) => SUBDOMAIN_PATTERN.test(name));
 }

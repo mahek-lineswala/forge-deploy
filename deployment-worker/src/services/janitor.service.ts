@@ -22,6 +22,7 @@ import {
   removeRuntimeContainer,
   removeRuntimeImage,
 } from "./hosting/runtime-container.service.js";
+import { reconcileSubdomainAliases } from "./hosting/alias.service.js";
 import { removeRuntimeRoute } from "./hosting/runtime-nginx.service.js";
 
 import type { DeploymentDocument } from "../types/deployment.types.js";
@@ -547,6 +548,9 @@ export async function runJanitor(): Promise<void> {
       "Workspace volume cleanup",
       cleanWorkspaceVolumes,
     );
+
+    // Keeps custom subdomains pointing at the latest live deployment, even after missed jobs.
+    await safely("Subdomain reconciliation", reconcileSubdomainAliases);
 
     if (
       workspaces +

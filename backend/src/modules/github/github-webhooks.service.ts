@@ -213,6 +213,22 @@ export async function createProjectGitHubWebhook(
 }
 
 // ============================================
+// GITHUB WEBHOOK STATUS
+// ============================================
+
+export async function getProjectGitHubWebhookStatus(
+  userId: string,
+  projectId: string,
+) {
+  const project = await getOwnedProject(userId, projectId);
+
+  return {
+    enabled: Boolean(project.githubWebhook?.active),
+    available: Boolean(process.env.GITHUB_WEBHOOK_URL),
+  };
+}
+
+// ============================================
 // DELETE GITHUB WEBHOOK
 // ============================================
 

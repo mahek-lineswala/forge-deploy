@@ -18,6 +18,8 @@ export interface Project {
   startCommand: string | null;
   outputDir: string | null;
   rootDir: string;
+  /** Custom name of the live URL (<name>.<domain>), or null. */
+  subdomain: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -34,6 +36,8 @@ export interface ProjectInput {
   startCommand?: string | null;
   outputDir?: string | null;
   rootDir?: string;
+  /** null removes the custom subdomain. */
+  subdomain?: string | null;
 }
 
 export const DEPLOYMENT_STATUSES = [

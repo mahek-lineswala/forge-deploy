@@ -19,6 +19,7 @@ import {
   Skeleton,
   StatusBadge,
 } from "../components/ui";
+import { liveUrl } from "../lib/domain";
 import { timeAgo } from "../lib/format";
 import { useDeployments, useProjects } from "../lib/queries";
 import type { Project } from "../lib/types";
@@ -108,6 +109,7 @@ function ProjectCard({ project }: { project: Project }) {
   const deployments = useDeployments(project.id);
   const latest = deployments.data?.[0];
   const live = deployments.data?.find((d) => d.status === "READY");
+  const publicUrl = liveUrl(project, live);
 
   return (
     <Link
@@ -127,10 +129,10 @@ function ProjectCard({ project }: { project: Project }) {
         </div>
 
         <div className="min-h-5 text-sm">
-          {live?.deploymentUrl ? (
+          {publicUrl ? (
             <span className="flex items-center gap-1.5 text-muted transition-colors group-hover:text-fg">
               <GlobeIcon className="size-3.5" />
-              <span className="truncate">{live.deploymentUrl.replace(/^https?:\/\//, "")}</span>
+              <span className="truncate">{publicUrl.replace(/^https?:\/\//, "")}</span>
             </span>
           ) : deployments.isPending ? (
             <Skeleton className="h-4 w-2/3" />

@@ -19,6 +19,8 @@ import { deploymentsRoutes } from "./modules/deployments/deployments.routes.js";
 import { environmentVariableRoutes } from "./modules/environment-variables/environment-variables.routes.js";
 import { githubRoutes } from "./modules/github/github.routes.js";
 import { githubWebhookRoutes } from "./modules/github/github-webhooks.routes.js";
+import { configRoutes } from "./modules/config/config.routes.js";
+import { maintenanceQueue } from "./modules/maintenance/maintenance.queue.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -171,6 +173,10 @@ export async function buildApp() {
     prefix: "/api"
   });
 
+  await app.register(configRoutes, {
+    prefix: "/api"
+  });
+
   await app.register(authRoutes, {
     prefix: "/api/auth"
   });
@@ -199,6 +205,7 @@ await app.register(githubWebhookRoutes, { prefix: "/api/github" });
 app.addHook("onClose", async () => {
   app.log.info("Closing deployment queue...");
   await deploymentQueue.close();
+  await maintenanceQueue.close();
 
   app.log.info("Closing Redis connection...");
   if (redis.status !== "end") {

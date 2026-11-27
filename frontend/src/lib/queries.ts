@@ -7,7 +7,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 
-import { ApiError, apiData } from "./api";
+import { ApiError, api, apiData } from "./api";
 import {
   isActiveStatus,
   type Deployment,
@@ -38,6 +38,8 @@ export const keys = {
   deployments: (projectId: string) => ["projects", projectId, "deployments"] as const,
   deployment: (id: string) => ["deployments", id] as const,
   envVars: (projectId: string) => ["projects", projectId, "env"] as const,
+  config: ["config"] as const,
+  webhook: (projectId: string) => ["projects", projectId, "webhook"] as const,
   githubAccount: ["github", "account"] as const,
   githubRepos: (page: number) => ["github", "repos", page] as const,
 };
@@ -259,6 +261,58 @@ export function useDeleteEnvVar(projectId: string) {
         method: "DELETE",
       }),
     onSuccess: () => client.invalidateQueries({ queryKey: keys.envVars(projectId) }),
+  });
+}
+
+// ============================================
+// DELETE DEPLOYMENT
+// ============================================
+
+export function useDeleteDeployment(deployment: Pick<Deployment, "id" | "projectId">) {
+  const client = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => api(`/deployments/${deployment.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      client.removeQueries({ queryKey: keys.deployment(deployment.id) });
+      void client.invalidateQueries({ queryKey: keys.deployments(deployment.projectId) });
+    },
+  });
+}
+
+// ============================================
+// PLATFORM SETTINGS + AUTO-DEPLOY
+// ============================================
+
+export interface PlatformConfig {
+  deploymentDomain: string | null;
+  autoDeployAvailable: boolean;
+}
+
+export function useConfig() {
+  return useQuery({
+    queryKey: keys.config,
+    queryFn: () => apiData<PlatformConfig>("/config"),
+    staleTime: Infinity,
+  });
+}
+
+/** Auto-deploy = a GitHub push webhook on the project's repository. */
+export function useAutoDeploy(projectId: string) {
+  return useQuery({
+    queryKey: keys.webhook(projectId),
+    queryFn: () =>
+      api<{ enabled: boolean; available: boolean }>(`/github/projects/${projectId}/webhook`),
+  });
+}
+
+export function useSetAutoDeploy(projectId: string) {
+  const client = useQueryClient();
+
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      api(`/github/projects/${projectId}/webhook`, { method: enabled ? "POST" : "DELETE" }),
+    onSuccess: () => client.invalidateQueries({ queryKey: keys.webhook(projectId) }),
   });
 }
 

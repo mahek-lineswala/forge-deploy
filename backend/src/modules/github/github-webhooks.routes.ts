@@ -6,10 +6,35 @@ import { AppError } from "../../lib/app-error.js";
 import {
   createProjectGitHubWebhook,
   deleteProjectGitHubWebhook,
+  getProjectGitHubWebhookStatus,
   processGitHubWebhook,
 } from "./github-webhooks.service.js";
 
 export async function githubWebhookRoutes(app: FastifyInstance) {
+  app.get(
+    "/projects/:projectId/webhook",
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ["GitHub"],
+        summary: "Get the auto-deploy (GitHub webhook) status of a project",
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: "object",
+          required: ["projectId"],
+          properties: {
+            projectId: { type: "string" },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const { projectId } = request.params as { projectId: string };
+
+      return getProjectGitHubWebhookStatus(request.user.sub, projectId);
+    },
+  );
+
   app.post(
     "/projects/:projectId/webhook",
     {

@@ -3,6 +3,7 @@ import { prisma } from "../../lib/prisma.js";
 import { AppError } from "../../lib/app-error.js";
 import { redis } from "../../lib/redis.js";
 import { enqueueDeployment, removeQueuedDeployment } from "./deployments.queue.js";
+import { enqueueRemoveDeployments, enqueueSyncAlias } from "../maintenance/maintenance.queue.js";
 import type {
   CreateDeploymentBody,
   DeploymentLogsQuery,
@@ -300,4 +301,33 @@ try {
   }
 
   return updatedDeployment;
+}
+
+// ============================================
+// DELETE DEPLOYMENT
+// Removes the record and logs now; the worker then takes the site offline
+// (route, container, image, files). Deleting the live deployment unpublishes the
+// project, and its custom subdomain stops resolving until the next deployment.
+// ============================================
+
+export async function deleteDeployment(
+  userId: string,
+  deploymentId: string
+) {
+  const deployment = await getDeploymentForUser(userId, deploymentId);
+
+  if (!TERMINAL_STATUSES.has(deployment.status)) {
+    throw new AppError(
+      409,
+      `A ${deployment.status} deployment is still in progress. Cancel it before deleting it`
+    );
+  }
+
+  await prisma.$transaction([
+    prisma.deploymentLog.deleteMany({ where: { deploymentId } }),
+    prisma.deployment.delete({ where: { id: deploymentId } }),
+  ]);
+
+  await enqueueRemoveDeployments([deploymentId]);
+  await enqueueSyncAlias(deployment.projectId);
 }

@@ -3,6 +3,7 @@ export const COLLECTIONS = {
   deployments: "Deployment",
   deploymentLogs: "DeploymentLog",
   projects: "Project",
+  projectSubdomains: "ProjectSubdomain",
   environmentVariables: "EnvironmentVariable",
   gitHubConnections: "GitHubConnection",
 } as const;

@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 
 import {
   cancelDeployment,
+  deleteDeployment,
   createDeployment,
   getDeploymentForUser,
   getDeploymentLogs,
@@ -238,6 +239,42 @@ export async function deploymentsRoutes(app: FastifyInstance) {
         success: true,
         data: { deployment },
       });
+    }
+  );
+
+  // ============================================
+  // DELETE DEPLOYMENT
+  // DELETE /api/deployments/:id
+  // ============================================
+
+  app.delete(
+    "/deployments/:id",
+    {
+      schema: {
+        tags: ["Deployments"],
+        summary: "Delete deployment",
+        description:
+          "Deletes a finished deployment and takes its URL offline. Cancel running deployments first.",
+        security: deploymentSecurity,
+        params: deploymentIdParamsJsonSchema,
+        response: {
+          200: {
+            type: "object",
+            properties: {
+              success: { type: "boolean" },
+              message: { type: "string" },
+            },
+            required: ["success", "message"],
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = deploymentIdParamsSchema.parse(request.params);
+
+      await deleteDeployment(request.user.sub, id);
+
+      return reply.send({ success: true, message: "Deployment deleted" });
     }
   );
 }

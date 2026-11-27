@@ -4,6 +4,7 @@ import { env } from "./config/env.js";
 import { prisma } from "./lib/prisma.js";
 import { redis } from "./lib/redis.js";
 import { deploymentQueue } from "./modules/deployments/deployments.queue.js";
+import { maintenanceQueue } from "./modules/maintenance/maintenance.queue.js";
 import { startDeploymentReconciler } from "./modules/deployments/deployments.reconciler.js";
 
 async function start() {
@@ -33,6 +34,7 @@ async function start() {
     // ============================================
 
     await deploymentQueue.waitUntilReady();
+    await maintenanceQueue.waitUntilReady();
 
     app.log.info("Deployment queue initialized successfully");
 

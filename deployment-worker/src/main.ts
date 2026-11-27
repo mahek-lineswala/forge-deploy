@@ -9,6 +9,7 @@ import {
 
 import { redis } from "./lib/redis.js";
 import { deploymentWorker } from "./worker.js";
+import { maintenanceWorker } from "./maintenance.worker.js";
 import { runJanitor } from "./services/janitor.service.js";
 import { migrateLegacyRuntimeRoutes } from "./services/hosting/runtime-nginx.service.js";
 
@@ -38,6 +39,14 @@ async function start(): Promise<void> {
       console.error("[Worker] Worker execution failed:", error);
       process.exitCode = 1;
       void shutdown("WORKER_FAILURE");
+    });
+
+    await maintenanceWorker.waitUntilReady();
+
+    void maintenanceWorker.run().catch((error) => {
+      console.error("[Worker] Maintenance worker failed:", error);
+      process.exitCode = 1;
+      void shutdown("MAINTENANCE_WORKER_FAILURE");
     });
 
     console.log("[Worker] ForgeDeploy worker is ready.");
@@ -78,6 +87,7 @@ async function shutdown(
 
   try {
     await deploymentWorker.close(force);
+    await maintenanceWorker.close(force);
 
     console.log("[Worker] BullMQ worker closed.");
 

@@ -32,6 +32,16 @@ const envSchema = z.object({
     .default("false")
     .transform((value) => value === "true"),
 
+  // Host that deployments are served under (e.g. shipnest.dpdns.org). Lets the
+  // dashboard show custom subdomains; leave unset in local development.
+  DEPLOYMENT_DOMAIN: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9.-]+$/, "DEPLOYMENT_DOMAIN must be a host name, without https://")
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+
   // Interactive Swagger UI at /documentation. Disable on public deployments.
   API_DOCS_ENABLED: z
     .enum(["true", "false"])

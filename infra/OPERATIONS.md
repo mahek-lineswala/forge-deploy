@@ -66,6 +66,24 @@ npx prisma db push
 cd ..
 ```
 
+If you changed anything under `infra/nginx/` (for example the custom-subdomain support), recreate Nginx.
+A plain reload can keep reading a stale copy of the mounted file on Docker Desktop:
+
+```powershell
+docker compose up -d --force-recreate nginx
+```
+
+### Deleting things and custom subdomains
+
+- **Delete a deployment** (deployment page → Delete) and **delete a project** (Settings → Delete project) take the
+  site offline within seconds. The worker removes the Nginx route, the container and image, the published files and
+  the build leftovers. If the worker was down, it finishes the job when it starts, and the janitor repairs anything
+  missed every 15 minutes. Watch it with `docker compose logs -f worker`.
+- **Custom subdomain** (project Settings → Domain): `<name>.<your domain>` always serves the latest successful
+  deployment. It works through `*.<your domain>`, which Cloudflare's tunnel and certificate already cover.
+- **Auto-deploy** (project Settings → Auto-deploy) adds a push webhook to the GitHub repository. It needs
+  `https://app.<your domain>` to be reachable, which the tunnel provides.
+
 ## 3. Daily checks
 
 ```powershell

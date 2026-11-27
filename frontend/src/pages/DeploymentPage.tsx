@@ -18,6 +18,7 @@ import {
   PipelineBar,
   Spinner,
   StatusBadge,
+  TrashIcon,
   XIcon,
   cx,
 } from "../components/ui";
@@ -27,6 +28,7 @@ import { failedStep, stepDurations, stripAnsi } from "../lib/pipeline";
 import {
   useCancelDeployment,
   useCreateDeployment,
+  useDeleteDeployment,
   useDeployment,
   useDeploymentLogs,
   useProject,
@@ -45,10 +47,12 @@ export function DeploymentPage({ deploymentId }: { deploymentId: string }) {
 function DeploymentView({ deployment }: { deployment: Deployment }) {
   const project = useProject(deployment.projectId);
   const cancel = useCancelDeployment(deployment);
+  const remove = useDeleteDeployment(deployment);
   const redeploy = useCreateDeployment(deployment.projectId);
   const navigate = useNavigate();
   const { logs, finished, error: logsError } = useDeploymentLogs(deployment.id);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const active = isActiveStatus(deployment.status);
   const now = useNow(active);
@@ -95,16 +99,21 @@ function DeploymentView({ deployment }: { deployment: Deployment }) {
                 <XIcon /> Cancel
               </Button>
             ) : (
-              <Button variant="secondary" loading={redeploy.isPending} onClick={() => void runAgain().catch(() => undefined)}>
-                <BoltIcon /> Redeploy
-              </Button>
+              <>
+                <Button variant="secondary" loading={redeploy.isPending} onClick={() => void runAgain().catch(() => undefined)}>
+                  <BoltIcon /> Redeploy
+                </Button>
+                <Button variant="danger" onClick={() => setConfirmDelete(true)}>
+                  <TrashIcon /> Delete
+                </Button>
+              </>
             )}
           </>
         }
       />
 
       <div className="space-y-6">
-        <ErrorBox error={cancel.error ?? redeploy.error} />
+        <ErrorBox error={cancel.error ?? redeploy.error ?? remove.error} />
 
         <Card className="p-6">
           <PipelineBar status={deployment.status} failedAt={failedAt} durations={durations} />
@@ -156,6 +165,26 @@ function DeploymentView({ deployment }: { deployment: Deployment }) {
         pending={cancel.isPending}
         onClose={() => setConfirmCancel(false)}
         onConfirm={() => cancel.mutate(undefined, { onSettled: () => setConfirmCancel(false) })}
+      />
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete this deployment?"
+        description={
+          deployment.status === "READY"
+            ? "This is the live deployment: its URL goes offline and the project's domain stops working until you deploy again. The build files and logs are deleted. This cannot be undone."
+            : "Its logs and build files are deleted and its link stops working. This cannot be undone."
+        }
+        confirmLabel="Delete deployment"
+        pending={remove.isPending}
+        error={remove.error}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={() =>
+          void remove
+            .mutateAsync()
+            .then(() => navigate({ to: "/projects/$projectId", params: { projectId: deployment.projectId }, search: { tab: undefined } }))
+            .catch(() => undefined)
+        }
       />
     </>
   );
