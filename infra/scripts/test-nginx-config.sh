@@ -10,12 +10,15 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 # Throwaway certificate standing in for Let's Encrypt.
-mkdir -p "$WORK/live/$DOMAIN" "$WORK/runtime"
+mkdir -p "$WORK/live/$DOMAIN" "$WORK/runtime/aliases"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$DOMAIN" \
   -keyout "$WORK/live/$DOMAIN/privkey.pem" -out "$WORK/live/$DOMAIN/fullchain.pem" 2>/dev/null
 
 # One runtime route in the format the worker writes.
 printf '# Managed by ForgeDeploy. Do not edit.\naaaaaaaaaaaaaaaaaaaaaaaa forgedeploy-runtime-test:3000;\n' > "$WORK/runtime/aaaaaaaaaaaaaaaaaaaaaaaa.map"
+
+# One custom subdomain alias in the format the worker writes.
+printf '# Managed by ForgeDeploy. Do not edit.\n"my-app.%s" aaaaaaaaaaaaaaaaaaaaaaaa;\n' "$DOMAIN" > "$WORK/runtime/aliases/my-app.alias"
 
 for mode in dev prod tunnel; do
   echo "== nginx -t ($mode)"
