@@ -147,7 +147,7 @@ these secret files, none of which are in git:
 
 | Symptom | Check |
 |---|---|
-| Site shows Cloudflare error 1033 / 502 | `docker compose logs cloudflared`; is Docker Desktop running? |
+| Site shows Cloudflare error 1033 / 502 | `docker compose logs cloudflared`; is Docker Desktop running? If the log repeats "QUIC … no recent network activity", the tunnel must use TCP: the compose file already sets `--protocol http2`. After laptop sleep or a Wi-Fi change, `docker compose restart cloudflared` reconnects at once. |
 | Page loads but login or API fails | `docker compose logs backend`; Atlas IP allow-list (your IP may have changed) |
 | Deployment stuck in Queued | `docker compose logs worker`; `docker compose ps` shows redis healthy? |
 | GitHub login goes to the wrong host | OAuth app callback must be `https://app.shipnest.dpdns.org/api/github/callback` |

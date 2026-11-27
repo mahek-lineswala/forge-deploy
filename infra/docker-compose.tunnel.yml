@@ -117,7 +117,8 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
+    # http2 = TCP. The default (QUIC/UDP) is often dropped by home networks and Wi-Fi, which shows as Error 1033.
+    command: ["tunnel", "--no-autoupdate", "--protocol", "http2", "--edge-ip-version", "4", "--config", "/etc/cloudflared/config.yml", "run"]
     volumes:
       - ./cloudflared:/etc/cloudflared:ro
     depends_on:
