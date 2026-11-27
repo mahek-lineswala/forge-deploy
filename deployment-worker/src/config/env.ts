@@ -48,9 +48,15 @@ const envSchema = z.object({
   // Deployments are served at http://<deploymentId>.<host>:<port>.
   DEPLOYMENT_BASE_URL: z.string().url().default("http://localhost:8080"),
   HEALTH_CHECK_ENABLED: booleanFlag,
+  // Where the worker reaches Nginx for health checks. Defaults to DEPLOYMENT_BASE_URL
+  // (development); in production use the internal listener: http://nginx:8080.
+  HEALTH_CHECK_URL: z.string().url().optional(),
   NGINX_CONTAINER_NAME: z.string().default("forgedeploy-nginx"),
 
-  // One <deploymentId>.conf per runtime deployment; mounted into Nginx at /etc/nginx/runtime.
+  // Days to keep files of FAILED/CANCELLED/SUPERSEDED static deployments (0 = next janitor run).
+  DEPLOYMENT_RETENTION_DAYS: z.coerce.number().int().min(0).max(365).default(7),
+
+  // One <deploymentId>.map route file per runtime deployment; mounted into Nginx at /etc/nginx/runtime.
   RUNTIME_NGINX_DIR: z.string().default("./runtime-nginx"),
 
   // ── Runtime containers ────────────────────────────────────

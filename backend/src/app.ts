@@ -39,7 +39,9 @@ export async function buildApp() {
           : undefined
     },
 
-    disableRequestLogging: true
+    disableRequestLogging: true,
+
+    trustProxy: env.TRUST_PROXY
   });
 
   await app.register(rawBody, {
@@ -75,14 +77,16 @@ export async function buildApp() {
     }
   });
 
-  // Swagger UI
-  await app.register(swaggerUi, {
-    routePrefix: "/documentation",
-    uiConfig: {
-      docExpansion: "list",
-      deepLinking: false
-    }
-  });
+  // Swagger UI (the OpenAPI spec above is always generated; only the UI is optional)
+  if (env.API_DOCS_ENABLED) {
+    await app.register(swaggerUi, {
+      routePrefix: "/documentation",
+      uiConfig: {
+        docExpansion: "list",
+        deepLinking: false
+      }
+    });
+  }
 
   // Custom request logging
   app.addHook("onRequest", async (request) => {

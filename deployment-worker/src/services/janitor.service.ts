@@ -11,6 +11,8 @@ import { ObjectId } from "mongodb";
 
 import { env } from "../config/env.js";
 import { COLLECTIONS } from "../constants/collections.js";
+import { RETIRED_DEPLOYMENT_STATUSES } from "../constants/deployment-status.js";
+import { isDeploymentId } from "../utils/deployment-id.js";
 import { getDatabase } from "../lib/mongodb.js";
 import {
   BUILD_CONTAINER_PREFIX,
@@ -32,12 +34,6 @@ const CONTAINER_STALE_AFTER_MS = BUILD_TIMEOUT + 5 * 60 * 1000;
 const RUNTIME_CONTAINER_PREFIX = "forgedeploy-runtime-";
 const RUNTIME_IMAGE_PREFIX = "forgedeploy-runtime:";
 
-// Runtime containers/images of deployments in these states are no longer needed.
-const REMOVABLE_RUNTIME_STATUSES = new Set([
-  "FAILED",
-  "CANCELLED",
-  "SUPERSEDED",
-]);
 
 async function ageMs(target: string): Promise<number | null> {
   const stats = await fs.stat(target).catch(() => null);
@@ -333,7 +329,7 @@ async function shouldRemoveRuntimeResources(
 
   if (!deployment) return true;
 
-  return REMOVABLE_RUNTIME_STATUSES.has(deployment.status);
+  return RETIRED_DEPLOYMENT_STATUSES.has(deployment.status);
 }
 
 /** Reconcile persistent runtime containers and their images against MongoDB. */
@@ -477,6 +473,43 @@ async function cleanWorkspaceVolumes(): Promise<number> {
   return removed;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Published static files of retired deployments (FAILED, CANCELLED, SUPERSEDED),
+ * kept for DEPLOYMENT_RETENTION_DAYS so recent deployments can still be inspected.
+ * READY and in-progress deployments are never touched.
+ */
+async function cleanRetiredStaticDeployments(): Promise<number> {
+  const root = path.resolve(env.DEPLOYMENTS_DIR);
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  const retentionMs = env.DEPLOYMENT_RETENTION_DAYS * DAY_MS;
+  let removed = 0;
+
+  for (const entry of entries) {
+    // Skips .staging/.trash and anything that is not a deployment folder.
+    if (!entry.isDirectory() || !isDeploymentId(entry.name)) continue;
+
+    const directory = path.join(root, entry.name);
+    const deployment = await getDatabase()
+      .collection<DeploymentDocument>(COLLECTIONS.deployments)
+      .findOne({ _id: new ObjectId(entry.name) }, { projection: { status: 1, updatedAt: 1 } });
+
+    if (deployment) {
+      if (!RETIRED_DEPLOYMENT_STATUSES.has(deployment.status)) continue;
+      if (Date.now() - new Date(deployment.updatedAt).getTime() < retentionMs) continue;
+    } else {
+      // No record (e.g. deleted): remove once the folder is clearly not being published.
+      const age = await ageMs(directory);
+      if (age === null || age < STALE_AFTER_MS) continue;
+    }
+
+    if (await removeDirectory(directory)) removed += 1;
+  }
+
+  return removed;
+}
+
 let running = false;
 
 export async function runJanitor(): Promise<void> {
@@ -500,6 +533,11 @@ export async function runJanitor(): Promise<void> {
       cleanOrphanContainers,
     );
 
+    const retiredStatic = await safely(
+      "Retired static deployment cleanup",
+      cleanRetiredStaticDeployments,
+    );
+
     const runtimeResources = await safely(
       "Runtime resource cleanup",
       cleanOrphanRuntimeResources,
@@ -515,11 +553,12 @@ export async function runJanitor(): Promise<void> {
         leftovers +
         buildContainers +
         runtimeResources +
+        retiredStatic +
         volumes >
       0
     ) {
       console.log(
-        `[Janitor] Removed ${workspaces} stale workspace(s), ${leftovers} publish leftover(s), ${buildContainers} build container(s), ${runtimeResources} runtime resource(s), and ${volumes} workspace volume(s).`,
+        `[Janitor] Removed ${workspaces} stale workspace(s), ${leftovers} publish leftover(s), ${retiredStatic} retired static deployment(s), ${buildContainers} build container(s), ${runtimeResources} runtime resource(s), and ${volumes} workspace volume(s).`,
       );
     }
   } finally {

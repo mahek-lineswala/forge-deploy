@@ -24,6 +24,19 @@ const envSchema = z.object({
     .string()
     .url()
     .default("http://localhost:5173"),
+
+  // true when running behind a reverse proxy (Nginx in production), so request.ip,
+  // rate limiting and logs use the client IP from X-Forwarded-For instead of the proxy's.
+  TRUST_PROXY: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+
+  // Interactive Swagger UI at /documentation. Disable on public deployments.
+  API_DOCS_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
 });
 
 export const env = envSchema.parse(process.env);

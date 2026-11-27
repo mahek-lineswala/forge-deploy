@@ -10,6 +10,7 @@ import {
 import { redis } from "./lib/redis.js";
 import { deploymentWorker } from "./worker.js";
 import { runJanitor } from "./services/janitor.service.js";
+import { migrateLegacyRuntimeRoutes } from "./services/hosting/runtime-nginx.service.js";
 
 const JANITOR_INTERVAL_MS = 15 * 60 * 1000;
 
@@ -42,6 +43,13 @@ async function start(): Promise<void> {
     console.log("[Worker] ForgeDeploy worker is ready.");
 
     // Remove leftovers from crashed attempts now, then periodically.
+    // Upgrade runtime route files written by older worker versions.
+    await migrateLegacyRuntimeRoutes()
+      .then((count) => {
+        if (count > 0) console.log(`[Worker] Migrated ${count} runtime route(s) to the map format.`);
+      })
+      .catch((error) => console.error("[Worker] Runtime route migration failed:", error));
+
     void runJanitor();
     janitorTimer = setInterval(() => void runJanitor(), JANITOR_INTERVAL_MS);
     janitorTimer.unref();

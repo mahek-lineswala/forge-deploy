@@ -7,14 +7,20 @@ import { docker } from "../../lib/docker.js";
 import { assertDeploymentId } from "../../utils/deployment-id.js";
 
 /**
- * One Nginx file per runtime deployment: <RUNTIME_NGINX_DIR>/<deploymentId>.conf,
- * included by infra/nginx/nginx.conf with `include /etc/nginx/runtime/*.conf`.
+ * Runtime routes are entries of the Nginx map `$deployment_id -> $runtime_upstream`
+ * (infra/nginx/nginx.conf). Each runtime deployment gets one file
+ * <RUNTIME_NGINX_DIR>/<deploymentId>.map containing a single line:
  *
- * The upstream is a variable, so Nginx resolves the container name per request
- * through Docker's DNS (resolver 127.0.0.11 in nginx.conf). A stopped or removed
- * container then returns 502 for that one site instead of making every later
- * `nginx -t` / reload fail with "host not found in upstream".
+ *   <deploymentId> <containerName>:<port>;
+ *
+ * The shared deployment server block proxies to that upstream when it is set and
+ * serves static files otherwise, so routes work with any domain and on every
+ * listener (HTTPS, internal health-check port). Container names are resolved per
+ * request through Docker's DNS, so a removed container only returns 502 for its
+ * own site and never breaks `nginx -t` or reloads.
  */
+
+const ROUTE_EXTENSION = ".map";
 
 function validateContainerName(containerName: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(containerName)) {
@@ -33,34 +39,11 @@ function routeDirectory(): string {
 }
 
 function routePath(deploymentId: string): string {
-  return path.join(routeDirectory(), `${deploymentId}.conf`);
+  return path.join(routeDirectory(), `${deploymentId}${ROUTE_EXTENSION}`);
 }
 
 function createRouteConfig(deploymentId: string, containerName: string, port: number): string {
-  return `# Managed by ForgeDeploy. Do not edit.
-server {
-    listen 80;
-    server_name ${deploymentId}.localhost;
-
-    client_max_body_size 10m;
-
-    location / {
-        set $forgedeploy_upstream http://${containerName}:${port};
-        proxy_pass $forgedeploy_upstream;
-        proxy_http_version 1.1;
-
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $forgedeploy_connection_upgrade;
-
-        proxy_read_timeout 60s;
-        proxy_send_timeout 60s;
-    }
-}
-`;
+  return `# Managed by ForgeDeploy. Do not edit.\n${deploymentId} ${containerName}:${port};\n`;
 }
 
 async function readIfExists(filePath: string): Promise<string | null> {
@@ -144,6 +127,44 @@ export function addRuntimeRoute(deploymentId: string, containerName: string, por
   validatePort(port);
 
   return serialize(() => applyRoute(deploymentId, createRouteConfig(deploymentId, containerName, port)));
+}
+
+/**
+ * Converts route files from the previous format (one `<id>.conf` server block per
+ * deployment) into `<id>.map` entries. Safe to run on every start.
+ */
+export function migrateLegacyRuntimeRoutes(): Promise<number> {
+  return serialize(async () => {
+    const entries = await fs.readdir(routeDirectory()).catch(() => [] as string[]);
+    let migrated = 0;
+
+    for (const entry of entries) {
+      const match = entry.match(/^([a-f0-9]{24})\.conf$/);
+
+      if (!match) continue;
+
+      const deploymentId = match[1]!;
+      const legacyPath = path.join(routeDirectory(), entry);
+      const legacy = await fs.readFile(legacyPath, "utf8");
+      const upstream = legacy.match(/http:\/\/([a-zA-Z0-9][a-zA-Z0-9_.-]*):(\d+)/);
+
+      if (upstream) {
+        await writeAtomically(
+          routePath(deploymentId),
+          createRouteConfig(deploymentId, upstream[1]!, Number(upstream[2])),
+        );
+      }
+
+      await fs.rm(legacyPath, { force: true });
+      migrated += 1;
+    }
+
+    if (migrated > 0) {
+      await testAndReload();
+    }
+
+    return migrated;
+  });
 }
 
 export function removeRuntimeRoute(deploymentId: string): Promise<void> {

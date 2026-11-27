@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx tsc --noEmit
+
+  worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deployment-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: deployment-worker/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Nginx config (dev + prod)
+        run: infra/scripts/test-nginx-config.sh
+      - name: Compose files
+        run: |
+          cp backend/.env.production.example backend/.env.production
+          cp deployment-worker/.env.production.example deployment-worker/.env.production
+          printf 'DEPLOYMENT_DOMAIN=example.com\nACME_EMAIL=ci@example.com\nFORGEDEPLOY_DATA_DIR=/srv/forgedeploy\nREDIS_PASSWORD=ci\n' > infra/.env
+          docker compose -f infra/docker-compose.yml config --quiet
+          docker compose -f infra/docker-compose.prod.yml --env-file infra/.env config --quiet
+      - name: Production images build
+        run: |
+          docker build -t forgedeploy-backend:ci backend
+          docker build -t forgedeploy-worker:ci deployment-worker

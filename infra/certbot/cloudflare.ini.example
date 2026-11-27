@@ -1,0 +1,3 @@
+# Cloudflare API token with permission: Zone → DNS → Edit, for the zone of DEPLOYMENT_DOMAIN.
+# Copy to infra/certbot/cloudflare.ini and run: chmod 600 infra/certbot/cloudflare.ini
+dns_cloudflare_api_token = REPLACE_ME

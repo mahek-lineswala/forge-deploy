@@ -21,10 +21,20 @@ type ExecError = Error & {
   code?: string | number;
 };
 
-export async function docker(
-  args: string[],
-  options: { timeoutMs?: number; signal?: AbortSignal; label?: string } = {},
-): Promise<string> {
+export interface DockerOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /** Used in error messages, e.g. "Runtime container start". */
+  label?: string;
+  /**
+   * "combined" (default): stdout + stderr, for human-readable logs (npm and Next.js write to stderr).
+   * "stdout": only stdout, for values that are parsed (container IDs). Docker may print
+   * warnings to stderr on success, which would corrupt the parsed value.
+   */
+  output?: "combined" | "stdout";
+}
+
+export async function docker(args: string[], options: DockerOptions = {}): Promise<string> {
   const timeoutMs = options.timeoutMs ?? 60_000;
 
   try {
@@ -34,6 +44,10 @@ export async function docker(
       windowsHide: true,
       signal: options.signal,
     });
+
+    if (options.output === "stdout") {
+      return stdout;
+    }
 
     return [stdout, stderr].filter(Boolean).join("\n");
   } catch (error) {

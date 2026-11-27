@@ -1,7 +1,13 @@
-# Local infrastructure: Redis (job queue) + Nginx (serves static and runtime deployments).
+# Local development infrastructure: Redis (job queue) + Nginx (serves deployments).
+# Backend and worker run on the host with `npm run dev` / `npm start`.
+#
 #   docker compose -f infra/docker-compose.yml up -d     start
 #   docker compose -f infra/docker-compose.yml stop      stop
+#
+# Deployments: http://<deploymentId>.localhost:8080
 # Ports bind to 127.0.0.1 only. Runtime containers join "forgedeploy-network" so Nginx can reach them.
+# Production uses infra/docker-compose.prod.yml instead (see infra/README.md).
+
 services:
   redis:
     image: redis:7-alpine
@@ -19,11 +25,15 @@ services:
     image: nginx:1.27-alpine
     container_name: forgedeploy-nginx
     restart: unless-stopped
+    environment:
+      DEPLOYMENT_DOMAIN: localhost
     ports:
       - "127.0.0.1:8080:80"
     volumes:
-      - ../deployment-worker/deployments:/srv/deployments:ro
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - ./nginx/templates/dev:/etc/nginx/templates:ro
+      - ../deployment-worker/deployments:/srv/deployments:ro
       - ../deployment-worker/runtime-nginx:/etc/nginx/runtime:ro
     networks:
       - forgedeploy-network

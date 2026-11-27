@@ -1,0 +1,109 @@
+# Production: HTTPS with a Let's Encrypt wildcard certificate for
+# ${DEPLOYMENT_DOMAIN} and *.${DEPLOYMENT_DOMAIN} (issued via Cloudflare DNS, see infra/README.md).
+#
+#   https://app.${DEPLOYMENT_DOMAIN}       dashboard + API (/api -> backend)
+#   https://<id>.${DEPLOYMENT_DOMAIN}      deployments
+#   http://nginx:8080 (internal only)      plain HTTP for the worker's health checks
+
+include /etc/nginx/snippets/cloudflare-realip.conf;
+
+ssl_certificate     /etc/letsencrypt/live/${DEPLOYMENT_DOMAIN}/fullchain.pem;
+ssl_certificate_key /etc/letsencrypt/live/${DEPLOYMENT_DOMAIN}/privkey.pem;
+ssl_protocols       TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers off;
+ssl_session_cache   shared:SSL:10m;
+ssl_session_timeout 1d;
+ssl_session_tickets off;
+
+# ── Port 80: health endpoint, everything else to HTTPS ──────────────
+server {
+  listen 80 default_server;
+  server_name _;
+
+  location = /healthz {
+    access_log off;
+    default_type text/plain;
+    return 200 "ok\n";
+  }
+
+  location / {
+    return 301 https://$host$request_uri;
+  }
+}
+
+# ── Unknown hostnames on 443: refuse the TLS handshake ──────────────
+server {
+  listen 443 ssl default_server;
+  server_name _;
+  ssl_reject_handshake on;
+}
+
+# ── Apex domain -> dashboard ────────────────────────────────────────
+server {
+  listen 443 ssl;
+  http2 on;
+  server_name ${DEPLOYMENT_DOMAIN};
+
+  return 301 https://app.${DEPLOYMENT_DOMAIN}$request_uri;
+}
+
+# ── Dashboard + API ─────────────────────────────────────────────────
+server {
+  listen 443 ssl;
+  http2 on;
+  server_name app.${DEPLOYMENT_DOMAIN};
+
+  add_header Strict-Transport-Security "max-age=31536000" always;
+
+  # GitHub webhook payloads can be up to 25 MB.
+  location /api/ {
+    client_max_body_size 25m;
+
+    # Resolved per request, so Nginx starts (and keeps serving deployments) even when
+    # the backend container is down or being recreated.
+    set $forgedeploy_backend http://backend:5000;
+    proxy_pass $forgedeploy_backend;
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 60s;
+  }
+
+  # Built dashboard (frontend/dist), mounted at /srv/dashboard.
+  root  /srv/dashboard;
+  index index.html;
+
+  location /assets/ {
+    try_files $uri =404;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+  }
+
+  location / {
+    try_files $uri /index.html =404;
+    add_header Cache-Control "no-cache" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Frame-Options "DENY" always;
+  }
+}
+
+# ── Deployments ─────────────────────────────────────────────────────
+server {
+  listen 443 ssl;
+  http2 on;
+  server_name *.${DEPLOYMENT_DOMAIN};
+
+  include /etc/nginx/snippets/deployment-site.conf;
+}
+
+# ── Internal plain HTTP for worker health checks (port not published) ──
+server {
+  listen 8080;
+  server_name *.${DEPLOYMENT_DOMAIN};
+
+  include /etc/nginx/snippets/deployment-site.conf;
+}

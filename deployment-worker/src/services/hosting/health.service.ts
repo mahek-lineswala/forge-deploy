@@ -22,7 +22,9 @@ interface ProbeResult {
  * This avoids depending on OS resolution of *.localhost.
  */
 function probe(deploymentId: string): Promise<ProbeResult> {
-  const base = new URL(env.DEPLOYMENT_BASE_URL);
+  // Nginx address reachable from the worker (in production: the internal plain-HTTP
+  // listener, e.g. http://nginx:8080). The Host header selects the deployment.
+  const base = new URL(env.HEALTH_CHECK_URL ?? env.DEPLOYMENT_BASE_URL);
 
   return new Promise((resolve, reject) => {
     const request = http.request(

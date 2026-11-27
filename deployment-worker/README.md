@@ -52,13 +52,26 @@ src/
   filesystem, all capabilities dropped and CPU/memory/PID limits.
 - Next.js projects keep `.next/cache` in a per-project volume between deployments.
 
+## Hosting
+
+Nginx serves every deployment at `<deploymentId>.<domain>` (config in `infra/nginx/`).
+Static deployments are files in `DEPLOYMENTS_DIR/<id>`. Runtime deployments are
+proxied to their container; the worker registers them as one-line map entries in
+`RUNTIME_NGINX_DIR/<id>.map` (`<id> <container>:<port>;`) and reloads Nginx.
+Route files from older worker versions (`<id>.conf`) are converted on startup.
+
+Health checks request the deployment from Nginx with its `Host` header, at
+`HEALTH_CHECK_URL` (production: the internal listener `http://nginx:8080`).
+
 ## Failure handling
 
 - `NonRetryableError` (bad credentials, missing `package.json`, unsupported
   framework, …) fails the job immediately; other errors retry with backoff.
 - Every state change is conditional on the attempt still owning the lease, so a
   stale attempt can never overwrite a newer one.
-- The janitor runs at startup and every 15 minutes.
+- The janitor runs at startup and every 15 minutes. Besides leftovers of crashed
+  attempts, it removes files of failed, cancelled and superseded static deployments
+  after `DEPLOYMENT_RETENTION_DAYS`.
 
 ## Commands
 
@@ -68,6 +81,7 @@ npm run dev          # watch mode: restarts on file save and kills in-flight bui
 npm run typecheck    # tsc --noEmit
 ```
 
-Requires Docker, plus Redis and Nginx from `infra/docker-compose.yml`. Copy
-`.env.example` to `.env` and use the same `DATABASE_URL`, `REDIS_URL` and
-`ENCRYPTION_KEY` as the backend.
+Development requires Docker, plus Redis and Nginx from `infra/docker-compose.yml`.
+Copy `.env.example` to `.env` and use the same `DATABASE_URL`, `REDIS_URL` and
+`ENCRYPTION_KEY` as the backend. Production runs the worker as a container from
+`infra/docker-compose.prod.yml` (see `infra/README.md`).

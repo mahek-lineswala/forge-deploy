@@ -38,10 +38,22 @@ function isPermanentGitFailure(error: unknown): boolean {
   );
 }
 
-async function isValidRepository(directory: string): Promise<boolean> {
+/**
+ * A usable clone has .git and a package.json in the project's root directory
+ * (the repository root, or rootDir for monorepos such as apps/web).
+ */
+async function isValidRepository(directory: string, rootDir: string): Promise<boolean> {
+  const repositoryRoot = path.resolve(directory);
+  const projectRoot = path.resolve(repositoryRoot, rootDir || ".");
+  const relative = path.relative(repositoryRoot, projectRoot);
+
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return false;
+  }
+
   try {
-    const gitDirectory = path.join(directory, ".git");
-    const packageFile = path.join(directory, "package.json");
+    const gitDirectory = path.join(repositoryRoot, ".git");
+    const packageFile = path.join(projectRoot, "package.json");
 
     const [gitStats, packageStats] = await Promise.all([
       fs.stat(gitDirectory),
@@ -96,7 +108,7 @@ export async function cloneDeploymentRepository(
   try {
     await assertLease();
 
-    if (await isValidRepository(destination)) {
+    if (await isValidRepository(destination, context.project.rootDir)) {
       await writeDeploymentLog({
         deploymentId,
         stage: "CLONE",
@@ -164,9 +176,9 @@ export async function cloneDeploymentRepository(
 
     await assertLease();
 
-    if (!(await isValidRepository(destination))) {
+    if (!(await isValidRepository(destination, context.project.rootDir))) {
       throw new NonRetryableError(
-        "Repository cloned, but no package.json was found at the repository root.",
+        `Repository cloned, but no package.json was found in the project root directory (${context.project.rootDir || "."}).`,
       );
     }
 

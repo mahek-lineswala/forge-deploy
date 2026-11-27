@@ -1,0 +1,3 @@
+# Secrets and host-specific settings
+.env
+certbot/cloudflare.ini

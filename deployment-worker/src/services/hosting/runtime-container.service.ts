@@ -200,6 +200,10 @@ export async function startRuntimeContainer(
     "--security-opt", "no-new-privileges",
     "--cap-drop", "ALL",
     "--label", `forgedeploy.deployment=${options.deploymentId}`,
+    // Bounded logs: long-running apps must not fill the disk.
+    "--log-driver", "json-file",
+    "--log-opt", "max-size=10m",
+    "--log-opt", "max-file=3",
     ...environment.flatMap((variable) => ["--env", `${variable.key}=${variable.value}`]),
     options.imageName,
   ];
@@ -210,7 +214,12 @@ export async function startRuntimeContainer(
 
   try {
     const containerId = (
-      await docker(args, { timeoutMs: 30_000, signal: options.signal, label: "Runtime container start" })
+      await docker(args, {
+        timeoutMs: 30_000,
+        signal: options.signal,
+        label: "Runtime container start",
+        output: "stdout",
+      })
     ).trim();
 
     if (!/^[a-f0-9]{12,64}$/i.test(containerId)) {

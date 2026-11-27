@@ -1,0 +1,24 @@
+# Development: plain HTTP. Published as 127.0.0.1:8080 by infra/docker-compose.yml.
+# Deployments: http://<id>.${DEPLOYMENT_DOMAIN}:8080  (DEPLOYMENT_DOMAIN=localhost)
+
+server {
+  listen 80 default_server;
+  server_name _;
+
+  location = /healthz {
+    access_log off;
+    default_type text/plain;
+    return 200 "ok\n";
+  }
+
+  location / {
+    return 404;
+  }
+}
+
+server {
+  listen 80;
+  server_name *.${DEPLOYMENT_DOMAIN};
+
+  include /etc/nginx/snippets/deployment-site.conf;
+}

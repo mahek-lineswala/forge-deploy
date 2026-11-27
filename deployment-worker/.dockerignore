@@ -1,0 +1,9 @@
+node_modules
+dist
+temp
+logs
+deployments
+runtime-nginx
+.env
+.env.*
+*.log

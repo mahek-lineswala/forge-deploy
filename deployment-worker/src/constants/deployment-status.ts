@@ -9,6 +9,13 @@ export const ACTIVE_DEPLOYMENT_STATUSES: DeploymentStatus[] = [
   "HEALTH_CHECK",
 ];
 
+/** Finished without becoming (or staying) the live deployment; its resources can be released. */
+export const RETIRED_DEPLOYMENT_STATUSES: ReadonlySet<DeploymentStatus> = new Set<DeploymentStatus>([
+  "FAILED",
+  "CANCELLED",
+  "SUPERSEDED",
+]);
+
 /** Deployment will never be processed again. */
 export const TERMINAL_DEPLOYMENT_STATUSES: ReadonlySet<DeploymentStatus> = new Set<DeploymentStatus>([
   "READY",
